@@ -1,8 +1,8 @@
+version: 2
+
 env:
   - GO111MODULE=on
   - CGO_ENABLED=0
-  - GITHUB_ORG=abhinavxd
-  - DOCKER_ORG=libredesk
 
 before:
   hooks:
@@ -38,7 +38,7 @@ builds:
       post: make stuff BIN={{ .Path }}
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: 'libredesk_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if eq .Arch "arm" }}v{{ .Arm }}{{ end }}'
     files:
       - config.sample.toml
@@ -53,136 +53,52 @@ source:
   format: tar.gz
   name_template: "libredesk_{{ .Version }}_source"
 
-dockers:
-  - use: buildx
-    goos: linux
-    goarch: amd64
+dockers_v2:
+  - &ghcr_image
+    id: libredesk
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}"
+    tags:
+      - "{{ .Tag }}"
     ids:
       - universal
-    image_templates:
-      - "{{ if not .Prerelease }}{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest-amd64{{ end }}"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}-amd64"
-      - "{{ if not .Prerelease }}ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest-amd64{{ end }}"
-      - "ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}-amd64"
-    build_flag_templates:
-      - --platform=linux/amd64
-      - --label=org.opencontainers.image.title={{ .ProjectName }}
-      - --label=org.opencontainers.image.description={{ .ProjectName }}
-      - --label=org.opencontainers.image.url=https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}
-      - --label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}
-      - --label=org.opencontainers.image.version={{ .Version }}
-      - --label=org.opencontainers.image.created={{ time "2006-01-02T15:04:05Z07:00" }}
-      - --label=org.opencontainers.image.revision={{ .FullCommit }}
-      - --label=org.opencontainers.image.licenses=AGPL-3.0
-    dockerfile: Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+      - linux/arm/v6
+      - linux/arm/v7
+    dockerfile: Dockerfile.goreleaser
     extra_files:
       - config.sample.toml
-
-  - use: buildx
-    goos: linux
-    goarch: arm64
-    ids:
-      - universal
-    image_templates:
-      - "{{ if not .Prerelease }}{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest-arm64{{ end }}"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}-arm64"
-      - "{{ if not .Prerelease }}ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest-arm64{{ end }}"
-      - "ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}-arm64"
-    build_flag_templates:
-      - --platform=linux/arm64
-      - --label=org.opencontainers.image.title={{ .ProjectName }}
-      - --label=org.opencontainers.image.description={{ .ProjectName }}
-      - --label=org.opencontainers.image.url=https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}
-      - --label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}
-      - --label=org.opencontainers.image.version={{ .Version }}
-      - --label=org.opencontainers.image.created={{ time "2006-01-02T15:04:05Z07:00" }}
-      - --label=org.opencontainers.image.revision={{ .FullCommit }}
-      - --label=org.opencontainers.image.licenses=AGPL-3.0
-    dockerfile: Dockerfile
-    extra_files:
-      - config.sample.toml
-
-  - use: buildx
-    goos: linux
-    goarch: arm
-    goarm: 6
-    ids:
-      - universal
-    image_templates:
-      - "{{ if not .Prerelease }}{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest-armv6{{ end }}"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}-armv6"
-      - "{{ if not .Prerelease }}ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest-armv6{{ end }}"
-      - "ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}-armv6"
-    build_flag_templates:
-      - --platform=linux/arm/v6
-      - --label=org.opencontainers.image.title={{ .ProjectName }}
-      - --label=org.opencontainers.image.description={{ .ProjectName }}
-      - --label=org.opencontainers.image.url=https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}
-      - --label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}
-      - --label=org.opencontainers.image.version={{ .Version }}
-      - --label=org.opencontainers.image.created={{ time "2006-01-02T15:04:05Z07:00" }}
-      - --label=org.opencontainers.image.revision={{ .FullCommit }}
-      - --label=org.opencontainers.image.licenses=AGPL-3.0
-    dockerfile: Dockerfile
-    extra_files:
-      - config.sample.toml
-
-  - use: buildx
-    goos: linux
-    goarch: arm
-    goarm: 7
-    ids:
-      - universal
-    image_templates:
-      - "{{ if not .Prerelease }}{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest-armv7{{ end }}"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}-armv7"
-      - "{{ if not .Prerelease }}ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest-armv7{{ end }}"
-      - "ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}-armv7"
-    build_flag_templates:
-      - --platform=linux/arm/v7
-      - --label=org.opencontainers.image.title={{ .ProjectName }}
-      - --label=org.opencontainers.image.description={{ .ProjectName }}
-      - --label=org.opencontainers.image.url=https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}
-      - --label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}
-      - --label=org.opencontainers.image.version={{ .Version }}
-      - --label=org.opencontainers.image.created={{ time "2006-01-02T15:04:05Z07:00" }}
-      - --label=org.opencontainers.image.revision={{ .FullCommit }}
-      - --label=org.opencontainers.image.licenses=AGPL-3.0
-    dockerfile: Dockerfile
-    extra_files:
-      - config.sample.toml
-
-docker_manifests:
-  - name_template: "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest"
-    skip_push: auto
-    image_templates:
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest-amd64"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest-arm64"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest-armv6"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:latest-armv7"
-  - name_template: "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}"
-    image_templates:
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}-amd64"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}-arm64"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}-armv6"
-      - "{{ .Env.DOCKER_ORG }}/{{ .ProjectName }}:{{ .Tag }}-armv7"
-  - name_template: ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest
-    skip_push: auto
-    image_templates:
-      - ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest-amd64
-      - ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest-arm64
-      - ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest-armv6
-      - ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:latest-armv7
-  - name_template: ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}
-    image_templates:
-      - ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}-amd64
-      - ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}-arm64
-      - ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}-armv6
-      - ghcr.io/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}:{{ .Tag }}-armv7
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "{{ .ProjectName }}"
+      org.opencontainers.image.url: "https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}"
+      org.opencontainers.image.source: "https://github.com/{{ .Env.GITHUB_ORG }}/{{ .ProjectName }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.created: '{{ time "2006-01-02T15:04:05Z07:00" }}'
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: AGPL-3.0
+  - <<: *ghcr_image
+    id: libredesk-amd64
+    tags: ["{{ .Tag }}-amd64"]
+    platforms: [linux/amd64]
+  - <<: *ghcr_image
+    id: libredesk-arm64
+    tags: ["{{ .Tag }}-arm64"]
+    platforms: [linux/arm64]
+  - <<: *ghcr_image
+    id: libredesk-armv6
+    tags: ["{{ .Tag }}-armv6"]
+    platforms: [linux/arm/v6]
+  - <<: *ghcr_image
+    id: libredesk-armv7
+    tags: ["{{ .Tag }}-armv7"]
+    platforms: [linux/arm/v7]
 
 release:
   github:
-    owner: abhinavxd
+    owner: "{{ .Env.GITHUB_ORG }}"
     name: libredesk
   prerelease: auto
   draft: true

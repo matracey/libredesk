@@ -1,0 +1,8 @@
+FROM alpine:3.18
+ARG TARGETPLATFORM
+RUN apk --no-cache add ca-certificates tzdata
+WORKDIR /libredesk
+COPY ${TARGETPLATFORM}/libredesk .
+COPY config.sample.toml config.toml
+EXPOSE 9000
+CMD ["./libredesk"]

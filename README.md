@@ -65,7 +65,7 @@ __________________
 
 ### Docker
 
-The latest image is available on DockerHub at [`libredesk/libredesk:latest`](https://hub.docker.com/r/libredesk/libredesk/tags?page=1&ordering=last_updated&name=latest)
+This fork publishes versioned images such as `ghcr.io/matracey/libredesk:v2.7.0-1`; it does not publish `latest`. Make the GHCR package public after the first publish to allow anonymous pulls.
 
 ```shell
 # Download the compose file and sample config file in the current directory.

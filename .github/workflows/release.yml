@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "v*.*.*-*"
 
 jobs:
   release:
@@ -17,18 +17,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[1-9][0-9]*$ ]]; then
+            echo "::error::Expected a tag such as v2.7.0-1"
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
-          cache-to: type=gha
-          cache-from: type=gha
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -53,7 +57,7 @@ jobs:
           restore-keys: release-go-${{ runner.os }}-
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
@@ -63,11 +67,55 @@ jobs:
           package_json_file: frontend/package.json
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          version: latest
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DOCKER_ORG: libredesk
           GITHUB_ORG: ${{ github.repository_owner }}
+
+      - name: Verify package is publicly pullable
+        env:
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ github.ref_name }}
+        run: |
+          scope="repository:${IMAGE_OWNER}/libredesk:pull"
+          # `--connect-timeout` bounds each connection attempt so a network stall fails
+          # fast with our actionable message instead of hanging for the whole job timeout.
+          # `--max-time` here is sized generously (not 15s) so it cannot cut the request's
+          # own `--retry 3 --retry-delay 3` short: --max-time bounds the *entire*
+          # invocation including all retries, so a too-small value would silently trigger
+          # via `|| true` and get misreported as "package is private" instead of a
+          # transient failure.
+          # `|| true` on each substitution below is required: this step must run to
+          # completion and print its own ::error:: diagnostic even when curl/grep/cut
+          # fail or find nothing (e.g. the expected 403-denied response for a private
+          # package), rather than being killed early by the shell's default `set -e`.
+          token_response=$(curl -sSL --connect-timeout 5 --max-time 30 --retry 3 --retry-delay 3 "https://ghcr.io/token?scope=${scope}" || true)
+          token=$(echo "$token_response" | grep -o '"token":"[^"]*"' | head -n1 | cut -d'"' -f4 || true)
+          if [[ -z "$token" ]]; then
+            echo "::error::ghcr.io/${IMAGE_OWNER}/libredesk is not anonymously pullable (or the request failed — see the auth response below). Set the libredesk package visibility to public in GitHub -> Packages -> Package settings, then re-run this job from the Actions tab."
+            echo "Auth response: $token_response"
+            exit 1
+          fi
+
+          # GHCR can take a few seconds to make a freshly pushed tag fetchable, so retry the
+          # manifest check a few times before treating it as a real visibility failure.
+          status=000
+          for attempt in 1 2 3 4 5; do
+            status=$(curl -sL --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/${IMAGE_OWNER}/libredesk/manifests/${IMAGE_TAG}" || true)
+            if [[ "$status" == "200" ]]; then
+              break
+            fi
+            if [[ "$attempt" -lt 5 ]]; then
+              sleep 5
+            fi
+          done
+          if [[ "$status" != "200" ]]; then
+            echo "::error::ghcr.io/${IMAGE_OWNER}/libredesk:${IMAGE_TAG} is not anonymously pullable (HTTP $status). Set the libredesk package visibility to public in GitHub -> Packages -> Package settings, then re-run this job from the Actions tab."
+            exit 1
+          fi
