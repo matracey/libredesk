@@ -4,9 +4,13 @@ on:
   push:
     tags:
       - "v*.*.*-*"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -116,3 +120,76 @@ jobs:
             echo "::error::ghcr.io/${IMAGE_OWNER}/libredesk:${IMAGE_TAG} is not anonymously pullable (HTTP $status). Set the libredesk package visibility to public in GitHub -> Packages -> Package settings, then re-run this job from the Actions tab."
             exit 1
           fi
+
+  rebase-upstream:
+    if: github.event_name != 'push'
+    concurrency:
+      group: ${{ github.workflow }}-rebase-upstream
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Checkout maintenance branch
+        uses: actions/checkout@v4
+        with:
+          ref: dark-mode-normalisation
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/abhinavxd/libredesk.git
+          git fetch upstream --tags
+
+      - name: Rebase onto latest upstream release
+        id: rebase
+        run: |
+          latest_tag=$(git tag --list "v*" --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | head -n 1 || true)
+          base_tag=$(git tag --merged HEAD --list "v*" --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | head -n 1 || true)
+          if [[ -z "$latest_tag" || -z "$base_tag" ]]; then
+            echo "::error::Could not resolve the current and latest upstream release tags"
+            exit 1
+          fi
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          if [[ "$latest_tag" == "$base_tag" ]]; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          git rebase --onto "$latest_tag" "$base_tag" dark-mode-normalisation
+          status=$?
+          set -e
+          if [[ $status -ne 0 ]]; then
+            git rebase --abort || true
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open conflict issue
+        if: steps.rebase.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST_TAG: ${{ steps.rebase.outputs.latest_tag }}
+        run: |
+          title="Automated upstream rebase conflict for $LATEST_TAG"
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq ".[0].number // empty")
+          if [[ -z "$existing" ]]; then
+            gh issue create \
+              --title "$title" \
+              --body "The scheduled rebase of \`dark-mode-normalisation\` onto \`$LATEST_TAG\` conflicted. The workflow aborted the rebase and did not update the branch or publish an image."
+          fi
+
+      - name: Fail after rebase conflict
+        if: steps.rebase.outputs.conflict == 'true'
+        run: |
+          echo "::error::Upstream rebase conflicted; see the open repository issue."
+          exit 1
+
+      - name: Update maintenance branch
+        if: steps.rebase.outputs.updated == 'true'
+        run: git push --force-with-lease origin HEAD:dark-mode-normalisation

@@ -73,6 +73,8 @@ __________________
 
 This fork publishes immutable images such as `ghcr.io/matracey/libredesk:v2.7.0-1` to GitHub Container Registry; it never publishes `latest`. GitHub creates the package as private on its first publish, so change the `libredesk` package visibility to public in GitHub → Packages → Package settings. The publishing workflow fails its visibility check until anonymous pulls are enabled.
 
+The `dark-mode-normalisation` branch is rebased weekly onto the latest upstream release tag. A successful scheduled rebase updates the branch with `--force-with-lease` but never creates a tag or publishes an image; review the rewritten branch before tagging it. Conflicts abort the rebase, leave the branch unchanged, open an issue, and fail the workflow.
+
 ```shell
 # Download the compose file and sample config file in the current directory.
 curl -LO https://github.com/abhinavxd/libredesk/raw/main/docker-compose.yml
