@@ -107,7 +107,8 @@
               </div>
               <div v-else ref="messageContentEl" @click="onMessageContentClick">
                 <Letter
-                  :html="sanitizedContent"
+                  :key="darkMode ? 'dark' : 'light'"
+                  :html="renderedHtmlContent"
                   :allowedSchemas="['cid', 'https', 'http', 'mailto']"
                   :allowed-css-properties="extendedCssProperties"
                   class="mb-1 native-html break-words"
@@ -252,7 +253,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, nextTick } from 'vue'
+import { computed, ref, onMounted, nextTick, watch } from 'vue'
 import { useConversationStore } from '@main/stores/conversation'
 import { useUserStore } from '@main/stores/user'
 import { useI18n } from 'vue-i18n'
@@ -286,6 +287,7 @@ import MessageEnvelope from './MessageEnvelope.vue'
 import CSATResponseDisplay from './CSATResponseDisplay.vue'
 import api from '@main/api'
 import { containsQuoteMarkers } from '@shared-ui/utils/quotedContent.js'
+import { normalizeEmailHtml } from '@/utils/emailHtmlNormalizer.js'
 
 const extendedCssProperties = [...allowedCssProperties, 'transform', 'transform-origin']
 
@@ -301,15 +303,21 @@ const measureExpandable = () => {
   isExpandable.value = el.scrollHeight > COLLAPSE_THRESHOLD_PX
 }
 
-onMounted(async () => {
-  await nextTick()
-  measureExpandable()
-
-  // Email HTML images change height after initial paint - re-measure on load.
+// Email HTML images change height after initial paint - re-measure on load. Also re-run
+// whenever the content DOM is (re)created, since a dark-mode toggle remounts the Letter
+// subtree (see the `props.darkMode` watcher below) and any images it inserts are fresh
+// elements with no listener attached yet.
+const attachImageLoadListeners = () => {
   const imgs = contentWrapperEl.value?.querySelectorAll?.('img') ?? []
   imgs.forEach((img) => {
     if (!img.complete) img.addEventListener('load', measureExpandable, { once: true })
   })
+}
+
+onMounted(async () => {
+  await nextTick()
+  measureExpandable()
+  attachImageLoadListeners()
 })
 
 const props = defineProps({
@@ -323,6 +331,10 @@ const props = defineProps({
     default: false
   },
   groupWithNext: {
+    type: Boolean,
+    default: false
+  },
+  darkMode: {
     type: Boolean,
     default: false
   }
@@ -376,6 +388,22 @@ const sanitizedContent = computed(() => {
   }
   return props.message.content || ''
 })
+const renderedHtmlContent = computed(() =>
+  normalizeEmailHtml(sanitizedContent.value, props.darkMode)
+)
+
+// The `:key` on <Letter> below remounts it whenever colour mode flips, since Letter bakes its
+// sanitized html into its own setup() closure once and never reacts to prop changes. That
+// remount replaces its <img> elements with fresh nodes, so the one-time onMounted listener
+// attachment above no longer covers them - reattach and re-measure after every such remount.
+watch(
+  () => props.darkMode,
+  async () => {
+    await nextTick()
+    measureExpandable()
+    attachImageLoadListeners()
+  }
+)
 
 const nonInlineAttachments = computed(() =>
   props.message.attachments.filter((attachment) => attachment.disposition !== 'inline')
