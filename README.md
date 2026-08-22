@@ -71,7 +71,7 @@ __________________
 
 ### Docker
 
-The latest image is available on DockerHub at [`libredesk/libredesk:latest`](https://hub.docker.com/r/libredesk/libredesk/tags?page=1&ordering=last_updated&name=latest)
+This fork publishes immutable images such as `ghcr.io/matracey/libredesk:v2.7.0-1` to GitHub Container Registry; it never publishes `latest`. GitHub creates the package as private on its first publish, so change the `libredesk` package visibility to public in GitHub → Packages → Package settings. The publishing workflow fails its visibility check until anonymous pulls are enabled.
 
 ```shell
 # Download the compose file and sample config file in the current directory.
