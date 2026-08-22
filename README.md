@@ -67,6 +67,8 @@ __________________
 
 This fork publishes versioned images such as `ghcr.io/matracey/libredesk:v2.7.0-1`; it does not publish `latest`. Make the GHCR package public after the first publish to allow anonymous pulls.
 
+Upstream rebasing is manual-only. Run **Release → Run workflow** from `main` to rebase `main` onto the latest stable upstream release tag. A successful run force-pushes `main`; conflicts leave the branch unchanged and open an issue. This action does not publish an image.
+
 ```shell
 # Download the compose file and sample config file in the current directory.
 curl -LO https://github.com/abhinavxd/libredesk/raw/main/docker-compose.yml
