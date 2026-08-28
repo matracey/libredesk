@@ -34,7 +34,7 @@ read_buffer_size = 65536
 # Keepalive settings.
 keepalive_timeout = "10s"
 
-# File upload provider to use, either `fs` or `s3`.
+# File upload provider to use: `fs`, `s3`, or `azblob`.
 [upload]
 provider = "fs"
 
@@ -64,6 +64,26 @@ bucket = "bucket-name"
 # Useful for organizing files inside a shared bucket.
 bucket_path = ""
 # S3 signed URL expiry duration (e.g., "30m", "1h")
+expiry = "30m"
+
+# Azure Blob Storage provider.
+[upload.azblob]
+# Storage account name and an existing blob container.
+account = ""
+container = ""
+# Optional prefix path within the container.
+container_path = ""
+# Leave empty to use https://<account>.blob.core.windows.net.
+# Set this for sovereign clouds or local emulators such as Azurite.
+endpoint = ""
+# Storage account key. Leave empty to use DefaultAzureCredential, including managed identity.
+# Assign Storage Blob Data Contributor. For SAS URLs, if data access is scoped only to the
+# container, also assign Storage Blob Delegator at storage account scope or higher.
+account_key = ""
+# Optional base URL for a CDN or Azure Front Door endpoint that can access this container.
+# When set, media URLs are returned without a SAS token.
+public_url = ""
+# SAS URL expiry duration. Defaults to 30m if unset.
 expiry = "30m"
 
 # Postgres.

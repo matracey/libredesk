@@ -1,4 +1,4 @@
-// Package media provides functionality for managing files backed by fs or S3.
+// Package media provides functionality for managing files across storage providers.
 package media
 
 import (
@@ -47,7 +47,7 @@ type Store interface {
 	GetBlob(name string) ([]byte, error)
 	Name() string
 	// SignedURLValidator returns a validator function if the store supports signed URLs.
-	// Returns nil if the store doesn't use signed URLs (e.g., S3 handles validation itself).
+	// Returns nil when the storage service validates signed URLs itself.
 	SignedURLValidator() func(name, sig string, exp int64) bool
 }
 
