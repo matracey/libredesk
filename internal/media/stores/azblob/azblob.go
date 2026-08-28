@@ -9,15 +9,24 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	azureblob "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
 	"github.com/abhinavxd/libredesk/internal/media"
 )
 
-const defaultExpiry = 30 * time.Minute
+const (
+	defaultExpiry         = 30 * time.Minute
+	delegationKeyLifetime = 7 * 24 * time.Hour
+	delegationClockSkew   = 5 * time.Minute
+	delegationRefreshLead = 24 * time.Hour
+	delegationRetryDelay  = 5 * time.Minute
+)
 
 // Opt holds configuration parameters for Azure Blob Storage.
 type Opt struct {
@@ -35,20 +44,23 @@ type Client struct {
 	client    *azureblob.Client
 	opts      Opt
 	sharedKey *azureblob.SharedKeyCredential
+
+	delegationMu     sync.Mutex
+	delegation       *service.UserDelegationCredential
+	delegationExpiry time.Time
+	delegationRetry  time.Time
 }
 
 var _ media.Store = (*Client)(nil)
 
-// New creates an Azure Blob Storage client using an account key.
+// New creates an Azure Blob Storage client. An account key is used when
+// configured; otherwise DefaultAzureCredential is used.
 func New(opt Opt) (media.Store, error) {
 	if opt.Account == "" {
 		return nil, fmt.Errorf("azure blob account is required")
 	}
 	if opt.Container == "" {
 		return nil, fmt.Errorf("azure blob container is required")
-	}
-	if opt.AccountKey == "" {
-		return nil, fmt.Errorf("azure blob account key is required")
 	}
 	if opt.Expiry < time.Second {
 		opt.Expiry = defaultExpiry
@@ -59,20 +71,42 @@ func New(opt Opt) (media.Store, error) {
 	opt.Endpoint = strings.TrimRight(opt.Endpoint, "/")
 	opt.PublicURL = strings.TrimRight(opt.PublicURL, "/")
 
-	sharedKey, err := azureblob.NewSharedKeyCredential(opt.Account, opt.AccountKey)
-	if err != nil {
-		return nil, fmt.Errorf("creating Azure Blob shared key credential: %w", err)
+	var (
+		cl        *azureblob.Client
+		sharedKey *azureblob.SharedKeyCredential
+		err       error
+	)
+	if opt.AccountKey != "" {
+		sharedKey, err = azureblob.NewSharedKeyCredential(opt.Account, opt.AccountKey)
+		if err != nil {
+			return nil, fmt.Errorf("creating Azure Blob shared key credential: %w", err)
+		}
+		cl, err = azureblob.NewClientWithSharedKeyCredential(opt.Endpoint, sharedKey, nil)
+	} else {
+		if opt.PublicURL == "" && opt.Expiry >= delegationKeyLifetime-delegationClockSkew {
+			return nil, fmt.Errorf("azure blob expiry must be less than %s when using managed identity", delegationKeyLifetime-delegationClockSkew)
+		}
+		credential, credErr := azidentity.NewDefaultAzureCredential(nil)
+		if credErr != nil {
+			return nil, fmt.Errorf("creating Azure default credential: %w", credErr)
+		}
+		cl, err = azureblob.NewClient(opt.Endpoint, credential, nil)
 	}
-	cl, err := azureblob.NewClientWithSharedKeyCredential(opt.Endpoint, sharedKey, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating Azure Blob client: %w", err)
 	}
 
-	return &Client{
+	c := &Client{
 		client:    cl,
 		opts:      opt,
 		sharedKey: sharedKey,
-	}, nil
+	}
+	if sharedKey == nil && opt.PublicURL == "" {
+		if _, _, err := c.getDelegationCredential(context.Background(), time.Now()); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
 }
 
 // Put uploads a file to Azure Blob Storage.
@@ -178,7 +212,23 @@ func (c *Client) makeSASURL(name, disposition, fileName string, now time.Time) (
 		values.Protocol = sas.ProtocolHTTPSandHTTP
 	}
 
-	query, err := values.SignWithSharedKey(c.sharedKey)
+	var (
+		query sas.QueryParameters
+		err   error
+	)
+	if c.sharedKey != nil {
+		query, err = values.SignWithSharedKey(c.sharedKey)
+	} else {
+		var credential *service.UserDelegationCredential
+		credential, expiry, err = c.getDelegationCredential(context.Background(), now)
+		values.ExpiryTime = minTime(expiry.Add(-delegationClockSkew), now.Add(c.opts.Expiry))
+		if !values.ExpiryTime.After(now) {
+			return "", fmt.Errorf("Azure user delegation credential has expired")
+		}
+		if err == nil {
+			query, err = values.SignWithUserDelegation(credential)
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("signing Azure Blob SAS: %w", err)
 	}
@@ -189,4 +239,47 @@ func (c *Client) makeSASURL(name, disposition, fileName string, now time.Time) (
 	}
 	u.RawQuery = query.Encode()
 	return u.String(), nil
+}
+
+func (c *Client) getDelegationCredential(ctx context.Context, now time.Time) (*service.UserDelegationCredential, time.Time, error) {
+	c.delegationMu.Lock()
+	defer c.delegationMu.Unlock()
+
+	requiredExpiry := now.Add(c.opts.Expiry + delegationRefreshLead)
+	if c.delegation != nil && c.delegationExpiry.After(requiredExpiry) {
+		return c.delegation, c.delegationExpiry, nil
+	}
+	if c.delegation != nil &&
+		c.delegationExpiry.After(now.Add(delegationClockSkew)) &&
+		now.Before(c.delegationRetry) {
+		return c.delegation, c.delegationExpiry, nil
+	}
+
+	start := now.Add(-delegationClockSkew)
+	expiry := start.Add(delegationKeyLifetime)
+	startValue := start.UTC().Format(time.RFC3339)
+	expiryValue := expiry.UTC().Format(time.RFC3339)
+	credential, err := c.client.ServiceClient().GetUserDelegationCredential(ctx, service.KeyInfo{
+		Start:  &startValue,
+		Expiry: &expiryValue,
+	}, nil)
+	if err != nil {
+		if c.delegation != nil && c.delegationExpiry.After(now.Add(delegationClockSkew)) {
+			c.delegationRetry = now.Add(delegationRetryDelay)
+			return c.delegation, c.delegationExpiry, nil
+		}
+		return nil, time.Time{}, fmt.Errorf("getting Azure Blob user delegation credential: %w", err)
+	}
+
+	c.delegation = credential
+	c.delegationExpiry = expiry
+	c.delegationRetry = time.Time{}
+	return credential, expiry, nil
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
