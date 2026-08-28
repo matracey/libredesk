@@ -36,6 +36,7 @@ import (
 	imodels "github.com/abhinavxd/libredesk/internal/inbox/models"
 	"github.com/abhinavxd/libredesk/internal/macro"
 	"github.com/abhinavxd/libredesk/internal/media"
+	"github.com/abhinavxd/libredesk/internal/media/stores/azblob"
 	fs "github.com/abhinavxd/libredesk/internal/media/stores/localfs"
 	"github.com/abhinavxd/libredesk/internal/media/stores/s3"
 	notifier "github.com/abhinavxd/libredesk/internal/notification"
@@ -585,6 +586,19 @@ func initMedia(db *sqlx.DB, i18n *i18n.I18n, settings *setting.Manager) *media.M
 		return u
 	}
 	switch s := ko.MustString("upload.provider"); s {
+	case "azblob":
+		store, err = azblob.New(azblob.Opt{
+			Account:       ko.String("upload.azblob.account"),
+			AccountKey:    ko.String("upload.azblob.account_key"),
+			Container:     ko.String("upload.azblob.container"),
+			ContainerPath: ko.String("upload.azblob.container_path"),
+			Endpoint:      ko.String("upload.azblob.endpoint"),
+			PublicURL:     ko.String("upload.azblob.public_url"),
+			Expiry:        ko.Duration("upload.azblob.expiry"),
+		})
+		if err != nil {
+			log.Fatalf("error initializing Azure Blob media store: %v", err)
+		}
 	case "s3":
 		store, err = s3.New(s3.Opt{
 			URL:        ko.String("upload.s3.url"),

@@ -273,7 +273,7 @@ func serveMediaFile(r *fastglue.Request, app *App, uuid string, media *mmodels.M
 		r.RequestCtx.Response.Header.Set("Cache-Control", fmt.Sprintf("%s, max-age=%d, immutable", cacheVisibility(media.Private), int(mediaCacheTTL.Seconds())))
 
 		fasthttp.ServeFile(r.RequestCtx, filepath.Join(ko.String("upload.fs.upload_path"), uuid))
-	case "s3":
+	case "s3", "azblob":
 		url := app.media.GetURL(uuid, media.ContentType, media.Filename)
 		if forceDownload {
 			url = app.media.GetURLForDownload(uuid, media.Filename)
