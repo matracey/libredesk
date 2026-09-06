@@ -25,6 +25,26 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderStoredEmailTemplateRendersSeededSubjectAndBody(t *testing.T) {
+	m, _ := newRenderManager(t)
+	data := map[string]any{
+		"Conversation": map[string]any{"ReferenceNumber": 42, "UUID": "ticket-42"},
+		"SLA":          map[string]any{"Metric": "first response", "OverdueBy": "5 minutes"},
+	}
+	body, subject, err := m.RenderStoredEmailTemplate(TmplSLABreached, data)
+	if want := "Urgent: SLA Breach for Conversation 42 for first response"; err != nil || subject != want {
+		t.Fatalf("RenderStoredEmailTemplate subject = %q, %v; want %q", subject, err, want)
+	}
+	for _, want := range []string{"conversation 42 has been breached", "for first response", "Overdue by: 5 minutes", "https://desk.example/inboxes/assigned/conversation/ticket-42"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body = %q, want substring %q", body, want)
+		}
+	}
+	if strings.Contains(body, "{{") {
+		t.Errorf("body contains unrendered template actions: %q", body)
+	}
+}
+
 func TestRenderEmailWithTemplateRejectsInvalidFieldAccess(t *testing.T) {
 	m, _ := newRenderManager(t)
 	got, err := m.RenderEmailWithTemplate(map[string]any{"Name": "Ada"}, `Hello {{ .Name }}; {{ .Name.Missing }} tail`)
