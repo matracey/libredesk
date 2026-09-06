@@ -83,6 +83,25 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationRendersInAppWithoutRecipientEmail(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	store := m.userStore.(*notifyUserStore)
+	recipient := store.recipients[7]
+	recipient.Email = null.String{}
+	store.recipients[7] = recipient
+	notification, emails := m.buildAutomationNotification(
+		`Ticket {{ .Conversation.ReferenceNumber }}`, `For {{ .Contact.FullName }}`, []int{7}, conv)
+	if notification.Title != "Ticket 0042" || !notification.Body.Valid || notification.Body.String != "For Ada Lovelace" {
+		t.Errorf("notification was not rendered without recipient email: %+v", notification)
+	}
+	if len(notification.RecipientIDs) != 1 || notification.RecipientIDs[0] != 7 {
+		t.Errorf("notification recipients = %v, want [7]", notification.RecipientIDs)
+	}
+	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+		t.Errorf("emails = %+v, want one empty email slot", emails)
+	}
+}
+
 func TestBuildAutomationNotificationUsesSharedFunctions(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	notification, emails := m.buildAutomationNotification(
