@@ -11,6 +11,7 @@ import (
 	amodels "github.com/abhinavxd/libredesk/internal/automation/models"
 	"github.com/abhinavxd/libredesk/internal/conversation/models"
 	notifier "github.com/abhinavxd/libredesk/internal/notification"
+	nchannels "github.com/abhinavxd/libredesk/internal/notification/channels"
 	nmodels "github.com/abhinavxd/libredesk/internal/notification/models"
 	tmpl "github.com/abhinavxd/libredesk/internal/template"
 	"github.com/abhinavxd/libredesk/internal/testutil"
@@ -69,6 +70,36 @@ func (s *notifyUserStore) UpgradeVisitorToContact(int) error {
 	return nil
 }
 
+func (s *notifyUserStore) GetChannelIdentity(int, string) (string, error) {
+	s.t.Helper()
+	s.t.Fatal("unexpected userStore.GetChannelIdentity call")
+	return "", nil
+}
+
+func (s *notifyUserStore) LinkChannelIdentity(int, string, string) (int, error) {
+	s.t.Helper()
+	s.t.Fatal("unexpected userStore.LinkChannelIdentity call")
+	return 0, nil
+}
+
+func notificationEmails(notification nmodels.Notification) []nmodels.EmailNotification {
+	emails := make([]nmodels.EmailNotification, len(notification.Recipients))
+	for i, recipient := range notification.Recipients {
+		if recipient.Email != nil {
+			emails[i] = *recipient.Email
+		}
+	}
+	return emails
+}
+
+func notificationRecipientIDs(notification nmodels.Notification) []int {
+	ids := make([]int, len(notification.Recipients))
+	for i, recipient := range notification.Recipients {
+		ids[i] = recipient.UserID
+	}
+	return ids
+}
+
 func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	t.Helper()
 	db := testutil.NewDB(t, "conversation_notify")
@@ -79,7 +110,10 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 		"RootURL":  func() string { return "https://desk.example" },
 		"SiteName": func() string { return "Support" },
 	}
-	renderer, err := tmpl.New(&lo, db, nil, nil, funcs, testutil.NewI18n(t))
+	notificationTemplates := template.Must(template.New("emails").Funcs(funcs).Parse(
+		`{{ define "header" }}<article data-site="{{ SiteName }}">{{ end }}` +
+			`{{ define "footer" }}</article>{{ end }}`))
+	renderer, err := tmpl.New(&lo, db, nil, notificationTemplates, funcs, testutil.NewI18n(t))
 	if err != nil {
 		t.Fatalf("creating template manager: %v", err)
 	}
@@ -93,15 +127,36 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo, db: db}, conv
 }
 
+func TestBuildAutomationNotificationExposesEmptyAuthorFields(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	field := `Author: {{ .Author.FirstName }}|{{ .Author.LastName }}|{{ .Author.FullName }}|{{ .Author.Email }}`
+	want := "Author: |||"
+	notification := m.buildAutomationNotification(field, field, []int{7}, conv)
+	emails := notificationEmails(notification)
+	if len(emails) != 1 || emails[0].Subject != want ||
+		!strings.Contains(emails[0].Content, `<p style="white-space: pre-line;">`+want+`</p>`) {
+		t.Errorf("emails = %+v, want empty Author fields rather than missing keys", emails)
+	}
+	if notification.Title != want || !notification.Body.Valid || notification.Body.String != want {
+		t.Errorf("notification = %+v, want empty Author fields", notification)
+	}
+}
+
 func TestBuildAutomationNotificationSurvivesMalformedEmailWrapper(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
-	m.db.MustExec(`UPDATE templates SET body = '{{ if }}broken{{ end }}' WHERE is_default`)
-	notification, emails := m.buildAutomationNotification(
+	broken := template.Must(template.New("emails").Parse(
+		`{{ define "header" }}{{ template "missing" . }}{{ end }}` +
+			`{{ define "footer" }}{{ end }}`))
+	if err := m.template.Reload(nil, broken, template.FuncMap{}); err != nil {
+		t.Fatal(err)
+	}
+	notification := m.buildAutomationNotification(
 		`Ticket {{ .Conversation.ReferenceNumber }}`, `For {{ .Contact.FullName }}`, []int{7}, conv)
+	emails := notificationEmails(notification)
 	if notification.Title != "Ticket 0042" || !notification.Body.Valid || notification.Body.String != "For Ada Lovelace" {
 		t.Errorf("malformed email wrapper affected in-app fields: %+v", notification)
 	}
-	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+	if len(emails) != 1 || emails[0].Recipient != "" || emails[0].Subject != "" || emails[0].Content != "" {
 		t.Errorf("emails = %+v, want one empty email slot", emails)
 	}
 }
@@ -128,7 +183,10 @@ func TestNotifyAutomationCapsPersistedRecipients(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating notification manager: %v", err)
 	}
-	m.dispatcher = notifier.NewDispatcher(notifier.DispatcherOpts{InApp: inApp, Lo: m.lo, EmailEnabled: false})
+	m.dispatcher = notifier.NewDispatcher(notifier.DispatcherOpts{
+		Pipeline: nchannels.NewPipeline(nchannels.NewInApp(inApp, nil, m.lo)),
+		Prefs:    &replyPreferences{channels: []nmodels.NotificationChannel{nmodels.NotificationChannelInApp}},
+	})
 	store := m.userStore.(*notifyUserStore)
 	entries := make([]string, amodels.MaxNotifyRecipients+1)
 	for i := range entries {
@@ -160,7 +218,8 @@ func TestBuildAutomationNotificationKeepsWrapperAndLinkOutsideRuleTemplates(t *t
 	m, conv := newNotifyTestManager(t)
 	subject := `{{ define "base" }}REPLACED SUBJECT{{ end }}Ticket {{ .Conversation.ReferenceNumber }}`
 	message := `{{ define "base" }}REPLACED WRAPPER{{ end }}{{ define "content" }}{{ if .Author.FullName }}HIDDEN{{ else }}Rule body{{ end }}{{ end }}`
-	notification, emails := m.buildAutomationNotification(subject, message, []int{7}, conv)
+	notification := m.buildAutomationNotification(subject, message, []int{7}, conv)
+	emails := notificationEmails(notification)
 	want := `<article data-site="Support"><p style="white-space: pre-line;">Rule body</p>
 
 <p>
@@ -182,7 +241,8 @@ func TestBuildAutomationNotificationDoesNotExecuteTemplateSyntaxInData(t *testin
 	recipient.FirstName, recipient.LastName = "{{ SiteName }}", "{{ .Conversation.ReferenceNumber }}"
 	store.recipients[7] = recipient
 	field := `{{ .Contact.FullName }} | {{ .Recipient.FullName }}`
-	notification, emails := m.buildAutomationNotification(field, field, []int{7}, conv)
+	notification := m.buildAutomationNotification(field, field, []int{7}, conv)
+	emails := notificationEmails(notification)
 	wantEmail := "{{ RootURL }} {{ .Recipient.FirstName }} | {{ SiteName }} {{ .Conversation.ReferenceNumber }}"
 	if len(emails) != 1 || emails[0].Subject != wantEmail || !strings.Contains(emails[0].Content, wantEmail) {
 		t.Errorf("emails = %+v, want literal data %q", emails, wantEmail)
@@ -196,16 +256,17 @@ func TestBuildAutomationNotificationDoesNotExecuteTemplateSyntaxInData(t *testin
 func TestBuildAutomationNotificationHidesMessageFromRuleFields(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	m.userStore.(*notifyUserStore).recipients[8] = umodels.User{ID: 8, FirstName: "Alan", Email: null.StringFrom("alan@example.com")}
-	notification, emails := m.buildAutomationNotification(
+	notification := m.buildAutomationNotification(
 		`Subject {{ .Recipient.FirstName }} [{{ .Message }}]`,
 		`Body {{ .Recipient.FirstName }} [{{ .Message }}]`, []int{7, 8}, conv)
+	emails := notificationEmails(notification)
 	if len(emails) != 2 {
 		t.Fatalf("got %d emails, want 2", len(emails))
 	}
 	for i, name := range []string{"Grace", "Alan"} {
 		wantSubject, wantBody := "Subject "+name+" [<no value>]", "Body "+name+" [<no value>]"
 		if emails[i].Subject != wantSubject ||
-			!strings.Contains(emails[i].Content, `<p style="white-space: pre-line;">`+wantBody+`</p>`) {
+			!strings.Contains(emails[i].Content, `<p style="white-space: pre-line;">`+template.HTMLEscapeString(wantBody)+`</p>`) {
 			t.Errorf("email %d = %+v, want Message absent from both rule fields", i, emails[i])
 		}
 	}
@@ -217,15 +278,16 @@ func TestBuildAutomationNotificationHidesMessageFromRuleFields(t *testing.T) {
 func TestBuildAutomationNotificationKeepsSlotsAfterAgentFetchFailure(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	m.userStore.(*notifyUserStore).failures = map[int]error{8: errors.New("agent unavailable")}
-	notification, emails := m.buildAutomationNotification(
+	notification := m.buildAutomationNotification(
 		`For {{ .Recipient.FirstName }}`, `Hello {{ .Recipient.FullName }}`, []int{8, 7}, conv)
-	if !slices.Equal(notification.RecipientIDs, []int{8, 7}) || len(emails) != 2 {
-		t.Fatalf("recipient IDs %v and emails %+v are not aligned", notification.RecipientIDs, emails)
+	emails := notificationEmails(notification)
+	if !slices.Equal(notificationRecipientIDs(notification), []int{8, 7}) || len(emails) != 2 {
+		t.Fatalf("recipient IDs %v and emails %+v are not aligned", notificationRecipientIDs(notification), emails)
 	}
-	if len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+	if emails[0].Recipient != "" || emails[0].Subject != "" || emails[0].Content != "" {
 		t.Errorf("failed recipient has nonempty email: %+v", emails[0])
 	}
-	if !slices.Equal(emails[1].Recipients, []string{"grace@example.com"}) ||
+	if emails[1].Recipient != "grace@example.com" ||
 		emails[1].Subject != "For Grace" || !strings.Contains(emails[1].Content, "Hello Grace Hopper") {
 		t.Errorf("later recipient did not receive its rendered email: %+v", emails[1])
 	}
@@ -237,23 +299,25 @@ func TestBuildAutomationNotificationRendersInAppWithoutRecipientEmail(t *testing
 	recipient := store.recipients[7]
 	recipient.Email = null.String{}
 	store.recipients[7] = recipient
-	notification, emails := m.buildAutomationNotification(
+	notification := m.buildAutomationNotification(
 		`Ticket {{ .Conversation.ReferenceNumber }}`, `For {{ .Contact.FullName }}`, []int{7}, conv)
+	emails := notificationEmails(notification)
 	if notification.Title != "Ticket 0042" || !notification.Body.Valid || notification.Body.String != "For Ada Lovelace" {
 		t.Errorf("notification was not rendered without recipient email: %+v", notification)
 	}
-	if len(notification.RecipientIDs) != 1 || notification.RecipientIDs[0] != 7 {
-		t.Errorf("notification recipients = %v, want [7]", notification.RecipientIDs)
+	if !slices.Equal(notificationRecipientIDs(notification), []int{7}) {
+		t.Errorf("notification recipients = %v, want [7]", notificationRecipientIDs(notification))
 	}
-	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+	if len(emails) != 1 || emails[0].Recipient != "" || emails[0].Subject != "" || emails[0].Content != "" {
 		t.Errorf("emails = %+v, want one empty email slot", emails)
 	}
 }
 
 func TestBuildAutomationNotificationUsesSharedFunctions(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
-	notification, emails := m.buildAutomationNotification(
+	notification := m.buildAutomationNotification(
 		`{{ SiteName }} at {{ RootURL }}`, `Visit {{ RootURL }} for {{ SiteName }}`, []int{7}, conv)
+	emails := notificationEmails(notification)
 	wantSubject, wantMessage := "Support at https://desk.example", "Visit https://desk.example for Support"
 	if len(emails) != 1 || emails[0].Subject != wantSubject || !strings.Contains(emails[0].Content, wantMessage) {
 		t.Errorf("emails = %+v, want shared functions rendered in both rule fields", emails)
@@ -266,11 +330,12 @@ func TestBuildAutomationNotificationUsesSharedFunctions(t *testing.T) {
 func TestBuildAutomationNotificationDiscardsPartialMessageOnExecutionError(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	message := `For {{ .Contact.FullName }}: {{ .Contact.FullName.Missing }} tail`
-	notification, emails := m.buildAutomationNotification(`Ticket {{ .Conversation.ReferenceNumber }}`, message, []int{7}, conv)
+	notification := m.buildAutomationNotification(`Ticket {{ .Conversation.ReferenceNumber }}`, message, []int{7}, conv)
+	emails := notificationEmails(notification)
 	if notification.Title != "Ticket 0042" || !notification.Body.Valid || notification.Body.String != message {
 		t.Errorf("notification = %+v, want rendered title and entire original message %q", notification, message)
 	}
-	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+	if len(emails) != 1 || emails[0].Recipient != "" || emails[0].Subject != "" || emails[0].Content != "" {
 		t.Errorf("emails = %+v, want one empty email slot", emails)
 	}
 }
@@ -278,11 +343,12 @@ func TestBuildAutomationNotificationDiscardsPartialMessageOnExecutionError(t *te
 func TestBuildAutomationNotificationPreservesMalformedMessage(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	message := `For {{ .Contact.FullName }} {{ if }}broken{{ end }}`
-	notification, emails := m.buildAutomationNotification(`Ticket {{ .Conversation.ReferenceNumber }}`, message, []int{7}, conv)
+	notification := m.buildAutomationNotification(`Ticket {{ .Conversation.ReferenceNumber }}`, message, []int{7}, conv)
+	emails := notificationEmails(notification)
 	if notification.Title != "Ticket 0042" || !notification.Body.Valid || notification.Body.String != message {
 		t.Errorf("notification = %+v, want rendered subject and raw message", notification)
 	}
-	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+	if len(emails) != 1 || emails[0].Recipient != "" || emails[0].Subject != "" || emails[0].Content != "" {
 		t.Errorf("emails = %+v, want one empty email slot", emails)
 	}
 }
@@ -290,11 +356,12 @@ func TestBuildAutomationNotificationPreservesMalformedMessage(t *testing.T) {
 func TestBuildAutomationNotificationPreservesMalformedSubject(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	subject := `Ticket {{ .Conversation.ReferenceNumber }} {{ if }}broken{{ end }}`
-	notification, emails := m.buildAutomationNotification(subject, `For {{ .Contact.FullName }}`, []int{7}, conv)
+	notification := m.buildAutomationNotification(subject, `For {{ .Contact.FullName }}`, []int{7}, conv)
+	emails := notificationEmails(notification)
 	if notification.Title != subject || !notification.Body.Valid || notification.Body.String != "For Ada Lovelace" {
 		t.Errorf("notification = %+v, want raw subject and rendered message", notification)
 	}
-	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+	if len(emails) != 1 || emails[0].Recipient != "" || emails[0].Subject != "" || emails[0].Content != "" {
 		t.Errorf("emails = %+v, want one empty email slot", emails)
 	}
 }
@@ -303,11 +370,12 @@ func TestBuildAutomationNotificationRendersMissingMapKeys(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	field := `{{ .Missing }}|{{ .Missing.Name }}|{{ .Contact.Missing }}`
 	want := "<no value>|<no value>|<no value>"
-	notification, emails := m.buildAutomationNotification(field, field, []int{7}, conv)
+	notification := m.buildAutomationNotification(field, field, []int{7}, conv)
+	emails := notificationEmails(notification)
 	if len(emails) != 1 {
 		t.Fatalf("got %d emails, want 1", len(emails))
 	}
-	if emails[0].Subject != want || !strings.Contains(emails[0].Content, want) {
+	if emails[0].Subject != want || !strings.Contains(emails[0].Content, template.HTMLEscapeString(want)) {
 		t.Errorf("email = %+v, want missing-key values %q", emails[0], want)
 	}
 	if notification.Title != want || !notification.Body.Valid || notification.Body.String != want {
@@ -319,9 +387,10 @@ func TestBuildAutomationNotificationIsolatesRecipients(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	store := m.userStore.(*notifyUserStore)
 	store.recipients[8] = umodels.User{ID: 8, FirstName: "Katherine", LastName: "Johnson", Email: null.StringFrom("katherine@example.com")}
-	notification, emails := m.buildAutomationNotification(
+	notification := m.buildAutomationNotification(
 		`For {{ .Recipient.FullName }} <{{ .Recipient.Email }}>`,
 		`Hello {{ .Recipient.FirstName }} | {{ .Recipient.LastName }}`, []int{7, 8}, conv)
+	emails := notificationEmails(notification)
 	if len(emails) != 2 {
 		t.Fatalf("got %d emails, want 2", len(emails))
 	}
@@ -332,8 +401,8 @@ func TestBuildAutomationNotificationIsolatesRecipients(t *testing.T) {
 		if emails[i].Subject != wantSubject || !strings.Contains(emails[i].Content, wantBody) {
 			t.Errorf("email %d = %+v, want subject %q and body %q", i, emails[i], wantSubject, wantBody)
 		}
-		if len(emails[i].Recipients) != 1 || emails[i].Recipients[0] != recipient.Email.String {
-			t.Errorf("email %d recipients = %v, want %q", i, emails[i].Recipients, recipient.Email.String)
+		if emails[i].Recipient != recipient.Email.String {
+			t.Errorf("email %d recipient = %q, want %q", i, emails[i].Recipient, recipient.Email.String)
 		}
 	}
 	if notification.Title != "For  <>" || !notification.Body.Valid || notification.Body.String != "Hello  | " {
@@ -348,7 +417,8 @@ func TestBuildAutomationNotificationRendersRuleFields(t *testing.T) {
 	wantSubject := "Ticket 0042 for Ada Lovelace"
 	wantMessage := "Please review 0042 with Ada Lovelace."
 
-	notification, emails := m.buildAutomationNotification(subject, message, []int{7}, conv)
+	notification := m.buildAutomationNotification(subject, message, []int{7}, conv)
+	emails := notificationEmails(notification)
 
 	if len(emails) != 1 {
 		t.Fatalf("got %d emails, want 1", len(emails))
@@ -372,7 +442,8 @@ func TestBuildAutomationNotificationPreservesPlainText(t *testing.T) {
 	subject := "Ticket 0042 for Ada Lovelace"
 	message := "Please review 0042 with Ada Lovelace."
 
-	notification, emails := m.buildAutomationNotification(subject, message, []int{7}, conv)
+	notification := m.buildAutomationNotification(subject, message, []int{7}, conv)
+	emails := notificationEmails(notification)
 
 	if len(emails) != 1 {
 		t.Fatalf("got %d emails, want 1", len(emails))
