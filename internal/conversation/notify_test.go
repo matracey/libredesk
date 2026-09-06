@@ -1,7 +1,9 @@
 package conversation
 
 import (
+	"errors"
 	"html/template"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,12 +18,16 @@ import (
 type notifyUserStore struct {
 	t          *testing.T
 	recipients map[int]umodels.User
+	failures   map[int]error
 }
 
 var _ userStore = (*notifyUserStore)(nil)
 
 func (s *notifyUserStore) GetAgentCachedOrLoad(id int) (umodels.User, error) {
 	s.t.Helper()
+	if err := s.failures[id]; err != nil {
+		return umodels.User{}, err
+	}
 	recipient, ok := s.recipients[id]
 	if !ok {
 		s.t.Fatalf("unexpected recipient ID %d", id)
@@ -81,6 +87,23 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 		Contact: models.ConversationContact{FirstName: "Ada", LastName: "Lovelace"},
 	}
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
+}
+
+func TestBuildAutomationNotificationKeepsSlotsAfterAgentFetchFailure(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	m.userStore.(*notifyUserStore).failures = map[int]error{8: errors.New("agent unavailable")}
+	notification, emails := m.buildAutomationNotification(
+		`For {{ .Recipient.FirstName }}`, `Hello {{ .Recipient.FullName }}`, []int{8, 7}, conv)
+	if !slices.Equal(notification.RecipientIDs, []int{8, 7}) || len(emails) != 2 {
+		t.Fatalf("recipient IDs %v and emails %+v are not aligned", notification.RecipientIDs, emails)
+	}
+	if len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+		t.Errorf("failed recipient has nonempty email: %+v", emails[0])
+	}
+	if !slices.Equal(emails[1].Recipients, []string{"grace@example.com"}) ||
+		emails[1].Subject != "For Grace" || !strings.Contains(emails[1].Content, "Hello Grace Hopper") {
+		t.Errorf("later recipient did not receive its rendered email: %+v", emails[1])
+	}
 }
 
 func TestBuildAutomationNotificationRendersInAppWithoutRecipientEmail(t *testing.T) {
