@@ -25,6 +25,14 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderStoredEmailTemplateMissingName(t *testing.T) {
+	m, _ := newRenderManager(t)
+	body, subject, err := m.RenderStoredEmailTemplate("absent-template", nil)
+	if err == nil || err.Error() != "template absent-template not found" || body != "" || subject != "" {
+		t.Fatalf("RenderStoredEmailTemplate = %q, %q, %v; want empty outputs and missing-name error", body, subject, err)
+	}
+}
+
 func TestRenderStoredEmailTemplateRendersSeededSubjectAndBody(t *testing.T) {
 	m, _ := newRenderManager(t)
 	data := map[string]any{
