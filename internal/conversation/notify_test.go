@@ -14,18 +14,19 @@ import (
 )
 
 type notifyUserStore struct {
-	t         *testing.T
-	recipient umodels.User
+	t          *testing.T
+	recipients map[int]umodels.User
 }
 
 var _ userStore = (*notifyUserStore)(nil)
 
 func (s *notifyUserStore) GetAgentCachedOrLoad(id int) (umodels.User, error) {
 	s.t.Helper()
-	if id != s.recipient.ID {
+	recipient, ok := s.recipients[id]
+	if !ok {
 		s.t.Fatalf("unexpected recipient ID %d", id)
 	}
-	return s.recipient, nil
+	return recipient, nil
 }
 
 func (s *notifyUserStore) Get(int, string, []string) (umodels.User, error) {
@@ -72,14 +73,40 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	if err != nil {
 		t.Fatalf("creating template manager: %v", err)
 	}
-	store := &notifyUserStore{t: t, recipient: umodels.User{
-		ID: 7, FirstName: "Grace", LastName: "Hopper", Email: null.StringFrom("grace@example.com"),
+	store := &notifyUserStore{t: t, recipients: map[int]umodels.User{
+		7: {ID: 7, FirstName: "Grace", LastName: "Hopper", Email: null.StringFrom("grace@example.com")},
 	}}
 	conv := models.Conversation{
 		ID: 42, UUID: "conversation-42", ReferenceNumber: "0042",
 		Contact: models.ConversationContact{FirstName: "Ada", LastName: "Lovelace"},
 	}
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
+}
+
+func TestBuildAutomationNotificationIsolatesRecipients(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	store := m.userStore.(*notifyUserStore)
+	store.recipients[8] = umodels.User{ID: 8, FirstName: "Katherine", LastName: "Johnson", Email: null.StringFrom("katherine@example.com")}
+	notification, emails := m.buildAutomationNotification(
+		`For {{ .Recipient.FullName }} <{{ .Recipient.Email }}>`,
+		`Hello {{ .Recipient.FirstName }} | {{ .Recipient.LastName }}`, []int{7, 8}, conv)
+	if len(emails) != 2 {
+		t.Fatalf("got %d emails, want 2", len(emails))
+	}
+	for i, id := range []int{7, 8} {
+		recipient := store.recipients[id]
+		wantSubject := "For " + recipient.FullName() + " <" + recipient.Email.String + ">"
+		wantBody := "Hello " + recipient.FirstName + " | " + recipient.LastName
+		if emails[i].Subject != wantSubject || !strings.Contains(emails[i].Content, wantBody) {
+			t.Errorf("email %d = %+v, want subject %q and body %q", i, emails[i], wantSubject, wantBody)
+		}
+		if len(emails[i].Recipients) != 1 || emails[i].Recipients[0] != recipient.Email.String {
+			t.Errorf("email %d recipients = %v, want %q", i, emails[i].Recipients, recipient.Email.String)
+		}
+	}
+	if notification.Title != "For  <>" || !notification.Body.Valid || notification.Body.String != "Hello  | " {
+		t.Errorf("in-app fields contain recipient data: %+v", notification)
+	}
 }
 
 func TestBuildAutomationNotificationRendersRuleFields(t *testing.T) {
