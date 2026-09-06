@@ -45,6 +45,14 @@ func TestRenderRejectsUnknownFunction(t *testing.T) {
 	}
 }
 
+func TestRenderDiscardsPartialOutputOnExecutionError(t *testing.T) {
+	m := &Manager{}
+	got, err := m.Render(map[string]any{"Name": "Ada"}, `Hello {{ .Name }}; {{ .Name.Missing }} tail`)
+	if err == nil || !strings.HasPrefix(err.Error(), "executing content template:") || got != "" {
+		t.Fatalf("Render = %q, %v; want empty output and content execution error", got, err)
+	}
+}
+
 func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	t.Helper()
 	db := testutil.NewDB(t, "template_render")
@@ -53,7 +61,10 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 		"RootURL":  func() string { return "https://desk.example" },
 		"SiteName": func() string { return "Support" },
 	}
-	m, err := New(&lo, db, nil, nil, funcs, testutil.NewI18n(t))
+	notificationTemplates := template.Must(template.New("emails").Funcs(funcs).Parse(
+		`{{ define "header" }}<html><body>{{ end }}` +
+			`{{ define "footer" }}</body></html>{{ end }}`))
+	m, err := New(&lo, db, nil, notificationTemplates, funcs, testutil.NewI18n(t))
 	if err != nil {
 		t.Fatalf("creating template manager: %v", err)
 	}
@@ -147,47 +158,50 @@ func TestRenderStoredEmailTemplateRendersSeededSubjectAndBody(t *testing.T) {
 	}
 }
 
-func TestRenderEmailWithTemplateRejectsInvalidFieldAccess(t *testing.T) {
+func TestRenderEmailWithTemplatePreservesInvalidFieldSyntax(t *testing.T) {
 	m, _ := newRenderManager(t)
-	got, err := m.RenderEmailWithTemplate(map[string]any{"Name": "Ada"}, `Hello {{ .Name }}; {{ .Name.Missing }} tail`)
-	if err == nil || !strings.Contains(err.Error(), "executing base template:") || got != "" {
-		t.Fatalf("RenderEmailWithTemplate = %q, %v; want empty output and execution error", got, err)
+	content := `Hello {{ .Name }}; {{ .Name.Missing }} tail`
+	got, err := m.RenderEmailWithTemplate(map[string]any{"Name": "Ada"}, content)
+	if err != nil || got != content {
+		t.Fatalf("RenderEmailWithTemplate = %q, %v; want literal content %q", got, err, content)
 	}
 }
 
-func TestRenderEmailWithTemplateUsesFunctionsInBaseAndContent(t *testing.T) {
+func TestRenderEmailWithTemplateUsesFunctionsOnlyInBase(t *testing.T) {
 	m, db := newRenderManager(t)
 	db.MustExec(`INSERT INTO templates (name, type, is_default, body) VALUES ('wrapper', 'email_outgoing', true, $1)`,
 		`{{ SiteName }}: {{ template "content" . }}`)
 	got, err := m.RenderEmailWithTemplate(nil, `Visit {{ RootURL }}`)
-	if want := "Support: Visit https://desk.example"; err != nil || got != want {
+	if want := "Support: Visit {{ RootURL }}"; err != nil || got != want {
 		t.Fatalf("RenderEmailWithTemplate = %q, %v; want %q", got, err, want)
 	}
 }
 
-func TestRenderEmailWithTemplateRendersMissingMapKeys(t *testing.T) {
+func TestRenderEmailWithTemplatePreservesMissingMapKeys(t *testing.T) {
 	m, _ := newRenderManager(t)
 	data := map[string]any{"Conversation": map[string]any{}}
-	got, err := m.RenderEmailWithTemplate(data, `{{ .Missing.Name }}|{{ .Conversation.Subject }}`)
-	if want := "<no value>|<no value>"; err != nil || got != want {
+	content := `{{ .Missing.Name }}|{{ .Conversation.Subject }}`
+	got, err := m.RenderEmailWithTemplate(data, content)
+	if want := content; err != nil || got != want {
 		t.Fatalf("RenderEmailWithTemplate = %q, %v; want %q without error", got, err, want)
 	}
 }
 
-func TestRenderEmailWithTemplateRejectsMalformedContent(t *testing.T) {
+func TestRenderEmailWithTemplatePreservesMalformedContent(t *testing.T) {
 	m, _ := newRenderManager(t)
-	got, err := m.RenderEmailWithTemplate(nil, `prefix {{ if }}broken{{ end }}`)
-	if err == nil || !strings.Contains(err.Error(), "parsing content template:") || got != "" {
-		t.Fatalf("RenderEmailWithTemplate = %q, %v; want empty output and content parse error", got, err)
+	content := `prefix {{ if }}broken{{ end }}`
+	got, err := m.RenderEmailWithTemplate(nil, content)
+	if err != nil || got != content {
+		t.Fatalf("RenderEmailWithTemplate = %q, %v; want literal content %q", got, err, content)
 	}
 }
 
-func TestRenderEmailWithTemplateWrapsContent(t *testing.T) {
+func TestRenderEmailWithTemplateWrapsContentVerbatim(t *testing.T) {
 	m, db := newRenderManager(t)
 	db.MustExec(`INSERT INTO templates (name, type, is_default, body) VALUES ('wrapper', 'email_outgoing', true, $1)`,
 		`<header>{{ .Name }}</header><main>{{ template "content" . }}</main>`)
 	got, err := m.RenderEmailWithTemplate(map[string]any{"Name": "Ada"}, `<p>Hello {{ .Name }}</p>`)
-	if want := "<header>Ada</header><main><p>Hello Ada</p></main>"; err != nil || got != want {
+	if want := "<header>Ada</header><main><p>Hello {{ .Name }}</p></main>"; err != nil || got != want {
 		t.Fatalf("RenderEmailWithTemplate = %q, %v; want %q", got, err, want)
 	}
 }
@@ -196,7 +210,7 @@ func TestRenderEmailWithTemplateWithoutDefault(t *testing.T) {
 	m, db := newRenderManager(t)
 	db.MustExec(`DELETE FROM templates WHERE is_default`)
 	got, err := m.RenderEmailWithTemplate(map[string]any{"Name": "Ada"}, `<p>Hello {{ .Name }}</p>`)
-	if err != nil || got != "<p>Hello Ada</p>" {
+	if err != nil || got != "<p>Hello {{ .Name }}</p>" {
 		t.Fatalf("RenderEmailWithTemplate = %q, %v; want unwrapped content", got, err)
 	}
 }
