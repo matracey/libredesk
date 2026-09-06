@@ -126,8 +126,9 @@ func TestAutomationNotifyUsesSystemLayout(t *testing.T) {
 			if email == nil || email.Subject != subject || email.Recipient != agent.Email.String || delivery.Recipient.UserID != agent.ID {
 				t.Fatalf("automation email changed subject or recipient: %+v", delivery)
 			}
+			expectedMessage := strings.ReplaceAll(message, "{{ .Author.FullName }}", "")
 			for _, want := range []string{
-				htmltemplate.HTMLEscapeString(message),
+				htmltemplate.HTMLEscapeString(expectedMessage),
 				"<!doctype html>",
 				"</html>",
 				"support.example.com/images/logo.png",
