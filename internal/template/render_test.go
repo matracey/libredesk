@@ -9,4 +9,14 @@ func TestRenderStringSubstitutesData(t *testing.T) {
 	if want := "Ticket #42: <b>Help</b>"; got != want {
 		t.Fatalf("RenderString = %q, want %q", got, want)
 	}
+
+}
+
+func TestRenderStringMissingMapKeys(t *testing.T) {
+	m := &Manager{}
+	data := map[string]any{"Conversation": map[string]any{}}
+	got := m.RenderString(data, `{{ .Missing }}|{{ .Missing.Name }}|{{ .Conversation.Subject }}`)
+	if want := "<no value>|<no value>|<no value>"; got != want {
+		t.Fatalf("RenderString = %q, want %q", got, want)
+	}
 }
