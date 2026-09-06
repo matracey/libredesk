@@ -4,10 +4,14 @@ import (
 	"errors"
 	"html/template"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	amodels "github.com/abhinavxd/libredesk/internal/automation/models"
 	"github.com/abhinavxd/libredesk/internal/conversation/models"
+	notifier "github.com/abhinavxd/libredesk/internal/notification"
+	nmodels "github.com/abhinavxd/libredesk/internal/notification/models"
 	tmpl "github.com/abhinavxd/libredesk/internal/template"
 	"github.com/abhinavxd/libredesk/internal/testutil"
 	umodels "github.com/abhinavxd/libredesk/internal/user/models"
@@ -86,7 +90,57 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 		ID: 42, UUID: "conversation-42", ReferenceNumber: "0042",
 		Contact: models.ConversationContact{FirstName: "Ada", LastName: "Lovelace"},
 	}
-	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
+	return &Manager{template: renderer, userStore: store, lo: &lo, db: db}, conv
+}
+
+func TestNotifyAutomationCapsPersistedRecipients(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	m.db.MustExec(`INSERT INTO users (id, type, first_name, last_name, enabled)
+		SELECT 10000 + i, 'agent', 'Agent', i::text, true FROM generate_series(0, $1::int) AS s(i)`,
+		amodels.MaxNotifyRecipients)
+	err := m.db.QueryRow(`WITH contact AS (
+		INSERT INTO users (type, first_name, last_name) VALUES ('contact', $3, $4) RETURNING id
+	), inbox AS (
+		INSERT INTO inboxes (name, channel) VALUES ('notify-cap', 'email') RETURNING id
+	)
+	INSERT INTO conversations (id, contact_id, inbox_id, status_id, reference_number)
+	SELECT $1, contact.id, inbox.id, (SELECT id FROM conversation_statuses WHERE name = 'Open'), $2
+	FROM contact, inbox RETURNING uuid`, conv.ID, conv.ReferenceNumber, conv.Contact.FirstName, conv.Contact.LastName).Scan(&conv.UUID)
+	if err != nil {
+		t.Fatalf("creating notification conversation: %v", err)
+	}
+	inApp, err := notifier.NewUserNotificationManager(notifier.UserNotificationOpts{
+		DB: m.db, Lo: m.lo, I18n: testutil.NewI18n(t),
+	})
+	if err != nil {
+		t.Fatalf("creating notification manager: %v", err)
+	}
+	m.dispatcher = notifier.NewDispatcher(notifier.DispatcherOpts{InApp: inApp, Lo: m.lo, EmailEnabled: false})
+	store := m.userStore.(*notifyUserStore)
+	entries := make([]string, amodels.MaxNotifyRecipients+1)
+	for i := range entries {
+		id := 10000 + i
+		store.recipients[id] = umodels.User{ID: id, Enabled: true, FirstName: "Agent"}
+		entries[i] = "user:" + strconv.Itoa(id)
+	}
+
+	if err := m.notifyAutomation(`Ticket {{ .Conversation.ReferenceNumber }}`, `For {{ .Contact.FullName }}`, entries, conv); err != nil {
+		t.Fatalf("notifyAutomation: %v", err)
+	}
+
+	var rows []nmodels.UserNotification
+	if err := m.db.Select(&rows, `SELECT user_id, title, body, conversation_id FROM user_notifications ORDER BY user_id`); err != nil {
+		t.Fatalf("reading persisted notifications: %v", err)
+	}
+	if len(rows) != amodels.MaxNotifyRecipients {
+		t.Fatalf("persisted %d notifications, want capped count %d", len(rows), amodels.MaxNotifyRecipients)
+	}
+	for i, row := range rows {
+		if row.UserID != 10000+i || row.Title != "Ticket 0042" || !row.Body.Valid || row.Body.String != "For Ada Lovelace" ||
+			!row.ConversationID.Valid || row.ConversationID.Int != conv.ID {
+			t.Fatalf("notification %d = %+v, want rendered fields for capped recipient %d", i, row, 10000+i)
+		}
+	}
 }
 
 func TestBuildAutomationNotificationKeepsWrapperAndLinkOutsideRuleTemplates(t *testing.T) {
