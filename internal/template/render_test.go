@@ -24,6 +24,16 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderEmailWithTemplateWrapsContent(t *testing.T) {
+	m, db := newRenderManager(t)
+	db.MustExec(`INSERT INTO templates (name, type, is_default, body) VALUES ('wrapper', 'email_outgoing', true, $1)`,
+		`<header>{{ .Name }}</header><main>{{ template "content" . }}</main>`)
+	got, err := m.RenderEmailWithTemplate(map[string]any{"Name": "Ada"}, `<p>Hello {{ .Name }}</p>`)
+	if want := "<header>Ada</header><main><p>Hello Ada</p></main>"; err != nil || got != want {
+		t.Fatalf("RenderEmailWithTemplate = %q, %v; want %q", got, err, want)
+	}
+}
+
 func TestRenderEmailWithTemplateWithoutDefault(t *testing.T) {
 	m, db := newRenderManager(t)
 	db.MustExec(`DELETE FROM templates WHERE is_default`)
