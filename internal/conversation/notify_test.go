@@ -93,6 +93,19 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo, db: db}, conv
 }
 
+func TestBuildAutomationNotificationSurvivesMalformedEmailWrapper(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	m.db.MustExec(`UPDATE templates SET body = '{{ if }}broken{{ end }}' WHERE is_default`)
+	notification, emails := m.buildAutomationNotification(
+		`Ticket {{ .Conversation.ReferenceNumber }}`, `For {{ .Contact.FullName }}`, []int{7}, conv)
+	if notification.Title != "Ticket 0042" || !notification.Body.Valid || notification.Body.String != "For Ada Lovelace" {
+		t.Errorf("malformed email wrapper affected in-app fields: %+v", notification)
+	}
+	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+		t.Errorf("emails = %+v, want one empty email slot", emails)
+	}
+}
+
 func TestNotifyAutomationCapsPersistedRecipients(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	m.db.MustExec(`INSERT INTO users (id, type, first_name, last_name, enabled)
