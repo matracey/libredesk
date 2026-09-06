@@ -19,6 +19,15 @@ func TestRenderSubstitutesData(t *testing.T) {
 	}
 }
 
+func TestRenderMissingMapKeys(t *testing.T) {
+	m := &Manager{}
+	data := map[string]any{"Conversation": map[string]any{}}
+	got, err := m.Render(data, `{{ .Missing }}|{{ .Missing.Name }}|{{ .Conversation.Subject }}`)
+	if want := "<no value>|<no value>|<no value>"; err != nil || got != want {
+		t.Fatalf("Render = %q, %v; want %q without error", got, err, want)
+	}
+}
+
 func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	t.Helper()
 	db := testutil.NewDB(t, "template_render")
