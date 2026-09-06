@@ -89,6 +89,24 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationKeepsWrapperAndLinkOutsideRuleTemplates(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	subject := `{{ define "base" }}REPLACED SUBJECT{{ end }}Ticket {{ .Conversation.ReferenceNumber }}`
+	message := `{{ define "base" }}REPLACED WRAPPER{{ end }}{{ define "content" }}{{ if .Author.FullName }}HIDDEN{{ else }}Rule body{{ end }}{{ end }}`
+	notification, emails := m.buildAutomationNotification(subject, message, []int{7}, conv)
+	want := `<article data-site="Support"><p style="white-space: pre-line;">Rule body</p>
+
+<p>
+<a href="https://desk.example/inboxes/all/conversation/conversation-42">#0042</a>
+</p></article>`
+	if len(emails) != 1 || emails[0].Subject != "Ticket 0042" || emails[0].Content != want {
+		t.Errorf("emails = %+v, want intact wrapper and reference link: %q", emails, want)
+	}
+	if notification.Title != "Ticket 0042" || !notification.Body.Valid || notification.Body.String != "Rule body" {
+		t.Errorf("notification fields did not render rule definitions: %+v", notification)
+	}
+}
+
 func TestBuildAutomationNotificationDoesNotExecuteTemplateSyntaxInData(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	conv.Contact.FirstName, conv.Contact.LastName = "{{ RootURL }}", "{{ .Recipient.FirstName }}"
