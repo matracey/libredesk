@@ -1,6 +1,16 @@
 package template
 
-import "testing"
+import (
+	"html/template"
+	"testing"
+)
+
+func TestRenderStringUsesFunctionMap(t *testing.T) {
+	m := &Manager{funcMap: template.FuncMap{"SiteName": func() string { return "Support" }}}
+	if got := m.RenderString(nil, `Welcome to {{ SiteName }}`); got != "Welcome to Support" {
+		t.Fatalf("RenderString = %q, want %q", got, "Welcome to Support")
+	}
+}
 
 func TestRenderStringPreservesEntireOriginalOnExecutionError(t *testing.T) {
 	m := &Manager{}
