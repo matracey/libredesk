@@ -82,6 +82,32 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationRendersRuleFields(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	subject := `Ticket {{ .Conversation.ReferenceNumber }} for {{ .Contact.FullName }}`
+	message := `Please review {{ .Conversation.ReferenceNumber }} with {{ .Contact.FullName }}.`
+	wantSubject := "Ticket 0042 for Ada Lovelace"
+	wantMessage := "Please review 0042 with Ada Lovelace."
+
+	notification, emails := m.buildAutomationNotification(subject, message, []int{7}, conv)
+
+	if len(emails) != 1 {
+		t.Fatalf("got %d emails, want 1", len(emails))
+	}
+	if emails[0].Subject != wantSubject {
+		t.Errorf("email subject = %q, want %q", emails[0].Subject, wantSubject)
+	}
+	if !strings.Contains(emails[0].Content, `<p style="white-space: pre-line;">`+wantMessage+`</p>`) {
+		t.Errorf("email content = %q, want rendered message %q", emails[0].Content, wantMessage)
+	}
+	if notification.Title != wantSubject {
+		t.Errorf("notification title = %q, want %q", notification.Title, wantSubject)
+	}
+	if !notification.Body.Valid || notification.Body.String != wantMessage {
+		t.Errorf("notification body = %v, want %q", notification.Body, wantMessage)
+	}
+}
+
 func TestBuildAutomationNotificationPreservesPlainText(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	subject := "Ticket 0042 for Ada Lovelace"
