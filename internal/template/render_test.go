@@ -25,6 +25,16 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderStoredEmailTemplateRejectsSubjectExecutionError(t *testing.T) {
+	m, db := newRenderManager(t)
+	db.MustExec(`UPDATE templates SET subject = $1, body = $2 WHERE name = $3`,
+		`Hello {{ .Name }}; {{ .Name.Missing }} tail`, `Body for {{ .Name }}`, TmplConversationAssigned)
+	body, subject, err := m.RenderStoredEmailTemplate(TmplConversationAssigned, map[string]any{"Name": "Ada"})
+	if err == nil || !strings.Contains(err.Error(), "executing subject template:") || body != "" || subject != "" {
+		t.Fatalf("RenderStoredEmailTemplate = %q, %q, %v; want empty outputs and subject execution error", body, subject, err)
+	}
+}
+
 func TestRenderStoredEmailTemplateRejectsMalformedSubject(t *testing.T) {
 	m, db := newRenderManager(t)
 	db.MustExec(`UPDATE templates SET subject = $1, body = $2 WHERE name = $3`,
