@@ -10,6 +10,15 @@ import (
 	"github.com/zerodha/logf"
 )
 
+func TestRenderSubstitutesData(t *testing.T) {
+	m := &Manager{funcMap: template.FuncMap{"SiteName": func() string { return "Support" }}}
+	data := map[string]any{"Conversation": map[string]any{"ReferenceNumber": "0042", "Subject": "<b>Help</b>"}}
+	got, err := m.Render(data, `<p>{{ SiteName }} #{{ .Conversation.ReferenceNumber }}: {{ .Conversation.Subject }}</p>`)
+	if want := "<p>Support #0042: <b>Help</b></p>"; err != nil || got != want {
+		t.Fatalf("Render = %q, %v; want %q", got, err, want)
+	}
+}
+
 func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	t.Helper()
 	db := testutil.NewDB(t, "template_render")
