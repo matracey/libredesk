@@ -89,6 +89,27 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationHidesMessageFromRuleFields(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	m.userStore.(*notifyUserStore).recipients[8] = umodels.User{ID: 8, FirstName: "Alan", Email: null.StringFrom("alan@example.com")}
+	notification, emails := m.buildAutomationNotification(
+		`Subject {{ .Recipient.FirstName }} [{{ .Message }}]`,
+		`Body {{ .Recipient.FirstName }} [{{ .Message }}]`, []int{7, 8}, conv)
+	if len(emails) != 2 {
+		t.Fatalf("got %d emails, want 2", len(emails))
+	}
+	for i, name := range []string{"Grace", "Alan"} {
+		wantSubject, wantBody := "Subject "+name+" [<no value>]", "Body "+name+" [<no value>]"
+		if emails[i].Subject != wantSubject ||
+			!strings.Contains(emails[i].Content, `<p style="white-space: pre-line;">`+wantBody+`</p>`) {
+			t.Errorf("email %d = %+v, want Message absent from both rule fields", i, emails[i])
+		}
+	}
+	if notification.Title != "Subject  [<no value>]" || !notification.Body.Valid || notification.Body.String != "Body  [<no value>]" {
+		t.Errorf("notification exposes Message or recipient data: %+v", notification)
+	}
+}
+
 func TestBuildAutomationNotificationKeepsSlotsAfterAgentFetchFailure(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	m.userStore.(*notifyUserStore).failures = map[int]error{8: errors.New("agent unavailable")}
