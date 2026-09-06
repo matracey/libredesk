@@ -82,10 +82,10 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
-func TestBuildAutomationNotificationLeavesRuleFieldsLiteral(t *testing.T) {
+func TestBuildAutomationNotificationPreservesPlainText(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
-	subject := `Ticket {{ .Conversation.ReferenceNumber }} for {{ .Contact.FullName }}`
-	message := `Please review {{ .Conversation.ReferenceNumber }} with {{ .Contact.FullName }}.`
+	subject := "Ticket 0042 for Ada Lovelace"
+	message := "Please review 0042 with Ada Lovelace."
 
 	notification, emails := m.buildAutomationNotification(subject, message, []int{7}, conv)
 
