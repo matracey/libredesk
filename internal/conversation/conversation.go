@@ -1734,20 +1734,84 @@ func (m *Manager) notifyAutomation(subject, message string, entries []string, co
 }
 
 func (m *Manager) buildAutomationNotification(subject, message string, userIDs []int, conv models.Conversation) nmodels.Notification {
+	data := notifyTemplateData(conv)
+	renderInApp := func(field, content string) string {
+		rendered, err := m.template.Render(data, content)
+		if err != nil {
+			m.lo.Error("error rendering notify action field", "field", field, "conversation_uuid", conv.UUID, "error", err)
+			return content
+		}
+		return rendered
+	}
+	title := renderInApp("subject", subject)
+	body := renderInApp("message", message)
+
 	recipients := m.buildNotificationRecipients(userIDs, func(recipient umodels.User) (string, string, error) {
-		data := template.BuildConversationData(conv, recipient, umodels.User{} /** author **/)
-		data["Message"] = map[string]any{"Content": message}
+		data["Recipient"] = notifyRecipientData(recipient)
+		// Message belongs to the wrapper, not to either rule field.
+		delete(data, "Message")
+		renderedSubject, err := m.template.Render(data, subject)
+		if err != nil {
+			return "", "", fmt.Errorf("rendering notify action subject: %w", err)
+		}
+		renderedMessage, err := m.template.Render(data, message)
+		if err != nil {
+			return "", "", fmt.Errorf("rendering notify action message: %w", err)
+		}
+		// Keep rule definitions and control flow separate from the wrapper and its link.
+		data["Message"] = map[string]any{"Content": renderedMessage}
 		content, err := m.template.RenderNotificationEmail(automationNotifyEmailContent, data)
-		return subject, content, err
+		return renderedSubject, content, err
 	})
 
 	return nmodels.Notification{
 		Type:             nmodels.NotificationTypeAutomation,
 		Recipients:       recipients,
-		Title:            subject,
-		Body:             null.StringFrom(message),
+		Title:            title,
+		Body:             null.StringFrom(body),
 		ConversationID:   null.IntFrom(conv.ID),
 		ConversationUUID: conv.UUID,
+	}
+}
+
+// notifyTemplateData exposes conversation and contact fields to notify rules.
+// Author fields are empty; Recipient fields are empty in-app and populated for each email.
+// The renderer supplies the same template functions as other notification templates.
+func notifyTemplateData(conv models.Conversation) map[string]any {
+	return map[string]any{
+		"Conversation": map[string]any{
+			"ReferenceNumber": conv.ReferenceNumber,
+			"Subject":         conv.Subject.String,
+			"Priority":        conv.Priority.String,
+			"UUID":            conv.UUID,
+		},
+		"Contact": map[string]any{
+			"FirstName": conv.Contact.FirstName,
+			"LastName":  conv.Contact.LastName,
+			"FullName":  conv.Contact.FullName(),
+			"Email":     conv.Contact.Email.String,
+		},
+		"Recipient": map[string]any{
+			"FirstName": "",
+			"LastName":  "",
+			"FullName":  "",
+			"Email":     "",
+		},
+		"Author": map[string]any{
+			"FirstName": "",
+			"LastName":  "",
+			"FullName":  "",
+			"Email":     "",
+		},
+	}
+}
+
+func notifyRecipientData(recipient umodels.User) map[string]any {
+	return map[string]any{
+		"FirstName": recipient.FirstName,
+		"LastName":  recipient.LastName,
+		"FullName":  recipient.FullName(),
+		"Email":     recipient.Email.String,
 	}
 }
 
