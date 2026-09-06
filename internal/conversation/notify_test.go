@@ -83,6 +83,19 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationUsesSharedFunctions(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	notification, emails := m.buildAutomationNotification(
+		`{{ SiteName }} at {{ RootURL }}`, `Visit {{ RootURL }} for {{ SiteName }}`, []int{7}, conv)
+	wantSubject, wantMessage := "Support at https://desk.example", "Visit https://desk.example for Support"
+	if len(emails) != 1 || emails[0].Subject != wantSubject || !strings.Contains(emails[0].Content, wantMessage) {
+		t.Errorf("emails = %+v, want shared functions rendered in both rule fields", emails)
+	}
+	if notification.Title != wantSubject || !notification.Body.Valid || notification.Body.String != wantMessage {
+		t.Errorf("notification = %+v, want shared functions rendered in both rule fields", notification)
+	}
+}
+
 func TestBuildAutomationNotificationDiscardsPartialMessageOnExecutionError(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	message := `For {{ .Contact.FullName }}: {{ .Contact.FullName.Missing }} tail`
