@@ -25,6 +25,16 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderStoredEmailTemplateRejectsMalformedSubject(t *testing.T) {
+	m, db := newRenderManager(t)
+	db.MustExec(`UPDATE templates SET subject = $1, body = $2 WHERE name = $3`,
+		`Hello {{ .Name }}; {{ if }}broken{{ end }}`, `Body for {{ .Name }}`, TmplConversationAssigned)
+	body, subject, err := m.RenderStoredEmailTemplate(TmplConversationAssigned, map[string]any{"Name": "Ada"})
+	if err == nil || !strings.Contains(err.Error(), "parsing subject template:") || body != "" || subject != "" {
+		t.Fatalf("RenderStoredEmailTemplate = %q, %q, %v; want empty outputs and subject parse error", body, subject, err)
+	}
+}
+
 func TestRenderStoredEmailTemplateMissingName(t *testing.T) {
 	m, _ := newRenderManager(t)
 	body, subject, err := m.RenderStoredEmailTemplate("absent-template", nil)
