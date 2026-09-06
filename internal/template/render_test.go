@@ -25,6 +25,16 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderStoredTemplatePreservesMalformedBody(t *testing.T) {
+	m, db := newRenderManager(t)
+	content := `Hello {{ .Name }}; {{ if }}broken{{ end }}`
+	db.MustExec(`UPDATE templates SET body = $1 WHERE name = $2`, content, TmplConversationAssigned)
+	got, err := m.RenderStoredTemplate(TmplConversationAssigned, map[string]any{"Name": "Ada"})
+	if err != nil || got != content {
+		t.Fatalf("RenderStoredTemplate = %q, %v; want original %q without error", got, err, content)
+	}
+}
+
 func TestRenderStoredTemplateRendersSeededBodyWithoutWrapping(t *testing.T) {
 	m, db := newRenderManager(t)
 	db.MustExec(`INSERT INTO templates (name, type, is_default, body) VALUES ('wrapper', 'email_outgoing', true, $1)`,
