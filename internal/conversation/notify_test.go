@@ -83,6 +83,22 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationRendersMissingMapKeys(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	field := `{{ .Missing }}|{{ .Missing.Name }}|{{ .Contact.Missing }}`
+	want := "<no value>|<no value>|<no value>"
+	notification, emails := m.buildAutomationNotification(field, field, []int{7}, conv)
+	if len(emails) != 1 {
+		t.Fatalf("got %d emails, want 1", len(emails))
+	}
+	if emails[0].Subject != want || !strings.Contains(emails[0].Content, want) {
+		t.Errorf("email = %+v, want missing-key values %q", emails[0], want)
+	}
+	if notification.Title != want || !notification.Body.Valid || notification.Body.String != want {
+		t.Errorf("notification = %+v, want missing-key values %q", notification, want)
+	}
+}
+
 func TestBuildAutomationNotificationIsolatesRecipients(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	store := m.userStore.(*notifyUserStore)
