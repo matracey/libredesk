@@ -89,6 +89,25 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationDoesNotExecuteTemplateSyntaxInData(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	conv.Contact.FirstName, conv.Contact.LastName = "{{ RootURL }}", "{{ .Recipient.FirstName }}"
+	store := m.userStore.(*notifyUserStore)
+	recipient := store.recipients[7]
+	recipient.FirstName, recipient.LastName = "{{ SiteName }}", "{{ .Conversation.ReferenceNumber }}"
+	store.recipients[7] = recipient
+	field := `{{ .Contact.FullName }} | {{ .Recipient.FullName }}`
+	notification, emails := m.buildAutomationNotification(field, field, []int{7}, conv)
+	wantEmail := "{{ RootURL }} {{ .Recipient.FirstName }} | {{ SiteName }} {{ .Conversation.ReferenceNumber }}"
+	if len(emails) != 1 || emails[0].Subject != wantEmail || !strings.Contains(emails[0].Content, wantEmail) {
+		t.Errorf("emails = %+v, want literal data %q", emails, wantEmail)
+	}
+	wantInApp := "{{ RootURL }} {{ .Recipient.FirstName }} | "
+	if notification.Title != wantInApp || !notification.Body.Valid || notification.Body.String != wantInApp {
+		t.Errorf("notification = %+v, want literal contact data %q", notification, wantInApp)
+	}
+}
+
 func TestBuildAutomationNotificationHidesMessageFromRuleFields(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	m.userStore.(*notifyUserStore).recipients[8] = umodels.User{ID: 8, FirstName: "Alan", Email: null.StringFrom("alan@example.com")}
