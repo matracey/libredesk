@@ -2,6 +2,7 @@ package template
 
 import (
 	"html/template"
+	"strings"
 	"testing"
 
 	"github.com/abhinavxd/libredesk/internal/testutil"
@@ -22,6 +23,14 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 		t.Fatalf("creating template manager: %v", err)
 	}
 	return m, db
+}
+
+func TestRenderEmailWithTemplateRejectsMalformedContent(t *testing.T) {
+	m, _ := newRenderManager(t)
+	got, err := m.RenderEmailWithTemplate(nil, `prefix {{ if }}broken{{ end }}`)
+	if err == nil || !strings.Contains(err.Error(), "parsing content template:") || got != "" {
+		t.Fatalf("RenderEmailWithTemplate = %q, %v; want empty output and content parse error", got, err)
+	}
 }
 
 func TestRenderEmailWithTemplateWrapsContent(t *testing.T) {
