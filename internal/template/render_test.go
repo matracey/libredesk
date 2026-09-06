@@ -36,6 +36,15 @@ func TestRenderRejectsMalformedSyntax(t *testing.T) {
 	}
 }
 
+func TestRenderRejectsUnknownFunction(t *testing.T) {
+	m := &Manager{}
+	got, err := m.Render(nil, `before {{ MissingFunction }} after`)
+	if err == nil || !strings.HasPrefix(err.Error(), "parsing content template:") ||
+		!strings.Contains(err.Error(), `function "MissingFunction" not defined`) || got != "" {
+		t.Fatalf("Render = %q, %v; want empty output and unknown-function parse error", got, err)
+	}
+}
+
 func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	t.Helper()
 	db := testutil.NewDB(t, "template_render")
