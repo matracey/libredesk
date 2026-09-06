@@ -28,6 +28,14 @@ func TestRenderMissingMapKeys(t *testing.T) {
 	}
 }
 
+func TestRenderRejectsMalformedSyntax(t *testing.T) {
+	m := &Manager{}
+	got, err := m.Render(map[string]any{"Name": "Ada"}, `Hello {{ .Name }}; {{ if }}broken{{ end }}`)
+	if err == nil || !strings.HasPrefix(err.Error(), "parsing content template:") || got != "" {
+		t.Fatalf("Render = %q, %v; want empty output and content parse error", got, err)
+	}
+}
+
 func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	t.Helper()
 	db := testutil.NewDB(t, "template_render")
