@@ -83,6 +83,18 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationPreservesMalformedSubject(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	subject := `Ticket {{ .Conversation.ReferenceNumber }} {{ if }}broken{{ end }}`
+	notification, emails := m.buildAutomationNotification(subject, `For {{ .Contact.FullName }}`, []int{7}, conv)
+	if notification.Title != subject || !notification.Body.Valid || notification.Body.String != "For Ada Lovelace" {
+		t.Errorf("notification = %+v, want raw subject and rendered message", notification)
+	}
+	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+		t.Errorf("emails = %+v, want one empty email slot", emails)
+	}
+}
+
 func TestBuildAutomationNotificationRendersMissingMapKeys(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	field := `{{ .Missing }}|{{ .Missing.Name }}|{{ .Contact.Missing }}`
