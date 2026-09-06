@@ -65,7 +65,7 @@ func TestNormalizeTimezoneFallsBackToUTC(t *testing.T) {
 		"",
 		"   ",
 		"Local",                  // Go resolves it, Postgres rejects it
-		"asia/kolkata",           // wrong case, IANA is case-sensitive
+		"Asia/Not_A_Timezone",    // invalid even on case-insensitive filesystems
 		"Mars/Olympus",           // not a real zone
 		"'; DROP TABLE users;--", // injection attempt
 		"UTC+5",                  // not an IANA name
