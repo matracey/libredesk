@@ -25,6 +25,14 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderEmailWithTemplateRejectsInvalidFieldAccess(t *testing.T) {
+	m, _ := newRenderManager(t)
+	got, err := m.RenderEmailWithTemplate(map[string]any{"Name": "Ada"}, `Hello {{ .Name }}; {{ .Name.Missing }} tail`)
+	if err == nil || !strings.Contains(err.Error(), "executing base template:") || got != "" {
+		t.Fatalf("RenderEmailWithTemplate = %q, %v; want empty output and execution error", got, err)
+	}
+}
+
 func TestRenderEmailWithTemplateUsesFunctionsInBaseAndContent(t *testing.T) {
 	m, db := newRenderManager(t)
 	db.MustExec(`INSERT INTO templates (name, type, is_default, body) VALUES ('wrapper', 'email_outgoing', true, $1)`,
