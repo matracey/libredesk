@@ -25,6 +25,25 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderStoredTemplateRendersSeededBodyWithoutWrapping(t *testing.T) {
+	m, db := newRenderManager(t)
+	db.MustExec(`INSERT INTO templates (name, type, is_default, body) VALUES ('wrapper', 'email_outgoing', true, $1)`,
+		`<main>{{ template "content" . }}</main>`)
+	data := map[string]any{"Conversation": map[string]any{"ReferenceNumber": 42, "Subject": "Need help", "UUID": "ticket-42"}}
+	body, err := m.RenderStoredTemplate(TmplConversationAssigned, data)
+	if err != nil {
+		t.Fatalf("RenderStoredTemplate: %v", err)
+	}
+	for _, want := range []string{"Reference number: 42", "Subject: Need help", "https://desk.example/inboxes/assigned/conversation/ticket-42"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body = %q, want substring %q", body, want)
+		}
+	}
+	if strings.Contains(body, "<main>") || strings.Contains(body, "{{") {
+		t.Errorf("body contains a wrapper or unrendered template actions: %q", body)
+	}
+}
+
 func TestRenderStoredEmailTemplateRejectsSubjectExecutionError(t *testing.T) {
 	m, db := newRenderManager(t)
 	db.MustExec(`UPDATE templates SET subject = $1, body = $2 WHERE name = $3`,
