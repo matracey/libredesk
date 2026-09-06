@@ -25,6 +25,16 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderEmailWithTemplateUsesFunctionsInBaseAndContent(t *testing.T) {
+	m, db := newRenderManager(t)
+	db.MustExec(`INSERT INTO templates (name, type, is_default, body) VALUES ('wrapper', 'email_outgoing', true, $1)`,
+		`{{ SiteName }}: {{ template "content" . }}`)
+	got, err := m.RenderEmailWithTemplate(nil, `Visit {{ RootURL }}`)
+	if want := "Support: Visit https://desk.example"; err != nil || got != want {
+		t.Fatalf("RenderEmailWithTemplate = %q, %v; want %q", got, err, want)
+	}
+}
+
 func TestRenderEmailWithTemplateRendersMissingMapKeys(t *testing.T) {
 	m, _ := newRenderManager(t)
 	data := map[string]any{"Conversation": map[string]any{}}
