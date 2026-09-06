@@ -83,6 +83,18 @@ func newNotifyTestManager(t *testing.T) (*Manager, models.Conversation) {
 	return &Manager{template: renderer, userStore: store, lo: &lo}, conv
 }
 
+func TestBuildAutomationNotificationDiscardsPartialMessageOnExecutionError(t *testing.T) {
+	m, conv := newNotifyTestManager(t)
+	message := `For {{ .Contact.FullName }}: {{ .Contact.FullName.Missing }} tail`
+	notification, emails := m.buildAutomationNotification(`Ticket {{ .Conversation.ReferenceNumber }}`, message, []int{7}, conv)
+	if notification.Title != "Ticket 0042" || !notification.Body.Valid || notification.Body.String != message {
+		t.Errorf("notification = %+v, want rendered title and entire original message %q", notification, message)
+	}
+	if len(emails) != 1 || len(emails[0].Recipients) != 0 || emails[0].Subject != "" || emails[0].Content != "" {
+		t.Errorf("emails = %+v, want one empty email slot", emails)
+	}
+}
+
 func TestBuildAutomationNotificationPreservesMalformedMessage(t *testing.T) {
 	m, conv := newNotifyTestManager(t)
 	message := `For {{ .Contact.FullName }} {{ if }}broken{{ end }}`
