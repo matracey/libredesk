@@ -1726,6 +1726,14 @@ func (m *Manager) notifyAutomation(subject, message string, entries []string, co
 		userIDs = userIDs[:amodels.MaxNotifyRecipients]
 	}
 
+	notification := m.buildAutomationNotification(subject, message, userIDs, conv)
+	if _, err := m.dispatcher.Send(notification); err != nil {
+		return fmt.Errorf("sending automation notification: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) buildAutomationNotification(subject, message string, userIDs []int, conv models.Conversation) nmodels.Notification {
 	recipients := m.buildNotificationRecipients(userIDs, func(recipient umodels.User) (string, string, error) {
 		data := template.BuildConversationData(conv, recipient, umodels.User{} /** author **/)
 		data["Message"] = map[string]any{"Content": message}
@@ -1733,17 +1741,14 @@ func (m *Manager) notifyAutomation(subject, message string, entries []string, co
 		return subject, content, err
 	})
 
-	if _, err := m.dispatcher.Send(nmodels.Notification{
+	return nmodels.Notification{
 		Type:             nmodels.NotificationTypeAutomation,
 		Recipients:       recipients,
 		Title:            subject,
 		Body:             null.StringFrom(message),
 		ConversationID:   null.IntFrom(conv.ID),
 		ConversationUUID: conv.UUID,
-	}); err != nil {
-		return fmt.Errorf("sending automation notification: %w", err)
 	}
-	return nil
 }
 
 func (m *Manager) buildNotificationRecipients(userIDs []int, render func(recipient umodels.User) (subject, content string, err error)) []nmodels.Recipient {
