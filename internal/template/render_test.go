@@ -2,6 +2,14 @@ package template
 
 import "testing"
 
+func TestRenderStringPreservesOriginalOnParseError(t *testing.T) {
+	m := &Manager{}
+	content := `Hello {{ .Name }}; {{ if }}broken{{ end }}`
+	if got := m.RenderString(map[string]any{"Name": "Ada"}, content); got != content {
+		t.Fatalf("RenderString = %q, want original %q", got, content)
+	}
+}
+
 func TestRenderStringSubstitutesData(t *testing.T) {
 	m := &Manager{}
 	data := map[string]any{"Conversation": map[string]any{"ReferenceNumber": 42, "Subject": "<b>Help</b>"}}
