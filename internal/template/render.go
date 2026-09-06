@@ -36,8 +36,32 @@ const (
 // RenderString renders Go template variables in the given content string
 // without wrapping it in the base email template. Returns original content on any error.
 func (m *Manager) RenderString(data any, content string) string {
-	rendered, _ := renderString(data, content, m.funcMap)
+	rendered, err := m.Render(data, content)
+	if err != nil {
+		return content
+	}
 	return rendered
+}
+
+// Render executes a template without an email wrapper and returns any parse or execution error.
+func (m *Manager) Render(data any, content string) (string, error) {
+	return m.render(data, content, TmplContent)
+}
+
+func (m *Manager) render(data any, content, name string) (string, error) {
+	m.mutex.RLock()
+	funcMap := m.funcMap
+	m.mutex.RUnlock()
+
+	t, err := template.New(name).Funcs(funcMap).Parse(content)
+	if err != nil {
+		return "", fmt.Errorf("parsing %s template: %w", name, err)
+	}
+	var buf strings.Builder
+	if err := t.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("executing %s template: %w", name, err)
+	}
+	return buf.String(), nil
 }
 
 // RenderStoredTemplate fetches a template by name and renders its body with the provided data
@@ -113,24 +137,12 @@ func (m *Manager) RenderStoredEmailTemplate(name string, data any) (string, stri
 		return "", "", err
 	}
 
-	executeSubjectTemplate := func(subject string) (string, error) {
-		var sb strings.Builder
-		subjectTmpl, err := template.New("subject").Funcs(m.funcMap).Parse(subject)
-		if err != nil {
-			return "", fmt.Errorf("parsing subject template: %w", err)
-		}
-		if err := subjectTmpl.Execute(&sb, data); err != nil {
-			return "", fmt.Errorf("executing subject template: %w", err)
-		}
-		return sb.String(), nil
-	}
-
 	content, err := m.RenderNotificationEmail(tmpl.Body, data)
 	if err != nil {
 		return "", "", err
 	}
 
-	subject, err := executeSubjectTemplate(tmpl.Subject.String)
+	subject, err := m.render(data, tmpl.Subject.String, "subject")
 	if err != nil {
 		return "", "", err
 	}
