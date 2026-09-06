@@ -25,6 +25,15 @@ func newRenderManager(t *testing.T) (*Manager, *sqlx.DB) {
 	return m, db
 }
 
+func TestRenderEmailWithTemplateRendersMissingMapKeys(t *testing.T) {
+	m, _ := newRenderManager(t)
+	data := map[string]any{"Conversation": map[string]any{}}
+	got, err := m.RenderEmailWithTemplate(data, `{{ .Missing.Name }}|{{ .Conversation.Subject }}`)
+	if want := "<no value>|<no value>"; err != nil || got != want {
+		t.Fatalf("RenderEmailWithTemplate = %q, %v; want %q without error", got, err, want)
+	}
+}
+
 func TestRenderEmailWithTemplateRejectsMalformedContent(t *testing.T) {
 	m, _ := newRenderManager(t)
 	got, err := m.RenderEmailWithTemplate(nil, `prefix {{ if }}broken{{ end }}`)
