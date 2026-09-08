@@ -2,34 +2,54 @@
   <div class="flex flex-col text-left" :class="isOutgoing ? 'items-end' : 'items-start'">
     <!-- Sender Name -->
     <div
-      v-if="!groupWithPrev"
+      v-if="!groupWithPrev || showEmailColorToggle"
       class="mb-1 flex items-center gap-1"
       :class="isOutgoing ? 'pr-2 md:pr-[47px]' : 'pl-10 md:pl-[47px]'"
     >
-      <router-link
-        v-if="!isOutgoing"
-        :to="{ name: 'contact-detail', params: { id: message.author?.id } }"
-        class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
+      <template v-if="!groupWithPrev">
+        <router-link
+          v-if="!isOutgoing"
+          :to="{ name: 'contact-detail', params: { id: message.author?.id } }"
+          class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
+        >
+          {{ getFullName }}
+        </router-link>
+        <router-link
+          v-else-if="canManageAI"
+          :to="aiAssistantRoute"
+          class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
+        >
+          {{ getFullName }}
+        </router-link>
+        <router-link
+          v-else-if="canManageUsers"
+          :to="{ name: 'edit-agent', params: { id: message.author?.id } }"
+          class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
+        >
+          {{ getFullName }}
+        </router-link>
+        <p v-else class="text-muted-foreground text-sm font-medium">
+          {{ getFullName }}
+        </p>
+      </template>
+
+      <Button
+        v-if="showEmailColorToggle"
+        type="button"
+        size="icon"
+        variant="ghost"
+        class="h-7 w-7 flex-shrink-0 text-muted-foreground focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        :class="{ 'bg-accent text-accent-foreground': showOriginalEmailColors }"
+        data-cy="email-color-toggle"
+        :title="emailColorToggleLabel"
+        :aria-label="emailColorToggleLabel"
+        :aria-pressed="showOriginalEmailColors"
+        @click="showOriginalEmailColors = !showOriginalEmailColors"
       >
-        {{ getFullName }}
-      </router-link>
-      <router-link
-        v-else-if="canManageAI"
-        :to="aiAssistantRoute"
-        class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
-      >
-        {{ getFullName }}
-      </router-link>
-      <router-link
-        v-else-if="canManageUsers"
-        :to="{ name: 'edit-agent', params: { id: message.author?.id } }"
-        class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
-      >
-        {{ getFullName }}
-      </router-link>
-      <p v-else class="text-muted-foreground text-sm font-medium">
-        {{ getFullName }}
-      </p>
+        <Moon v-if="showOriginalEmailColors" aria-hidden="true" />
+        <Sun v-else aria-hidden="true" />
+        <span class="sr-only">{{ emailColorToggleLabel }}</span>
+      </Button>
     </div>
 
     <!-- Message Bubble -->
@@ -80,7 +100,7 @@
         </div>
 
         <div
-          class="flex flex-col justify-end message-bubble"
+          class="flex flex-col justify-end message-bubble transition-colors duration-150"
           :class="bubbleClasses"
         >
           <div v-if="isDeleted" class="text-sm italic text-muted-foreground">
@@ -93,23 +113,6 @@
             <hr class="mb-2 border-muted-foreground/20" v-if="showEnvelope" />
 
             <!-- Message Content -->
-            <div v-if="showEmailColorToggle" class="mb-1 flex justify-end">
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost"
-                class="h-7 px-2 text-muted-foreground hover:text-foreground"
-                data-cy="email-color-toggle"
-                :aria-label="emailColorToggleLabel"
-                :aria-pressed="showOriginalEmailColors"
-                @click="showOriginalEmailColors = !showOriginalEmailColors"
-              >
-                <Moon v-if="showOriginalEmailColors" :size="13" />
-                <Sun v-else :size="13" />
-                {{ emailColorToggleLabel }}
-              </Button>
-            </div>
-
             <div
               ref="contentWrapperEl"
               class="relative"
@@ -138,7 +141,9 @@
                 v-if="isExpandable && !isExpanded"
                 class="absolute left-0 right-0 bottom-0 h-24 flex items-end justify-center pointer-events-none"
                 :class="
-                  message.private
+                  showOriginalEmailColors
+                    ? 'bg-gradient-to-t from-white via-white/90 to-transparent'
+                    : message.private
                     ? 'bg-gradient-to-t from-private via-private/90 to-transparent'
                     : isOutgoing
                       ? 'bg-gradient-to-t from-secondary via-secondary/90 to-transparent'
@@ -466,6 +471,8 @@ const nonInlineAttachments = computed(() =>
 const bubbleClasses = computed(() => ({
   'bg-private': isOutgoing.value && props.message.private,
   'bg-secondary border border-border': isOutgoing.value && !props.message.private,
+  'bg-white text-neutral-950 border-neutral-300 [color-scheme:light]':
+    !isOutgoing.value && showOriginalEmailColors.value,
   'opacity-50 animate-pulse': isOutgoing.value && props.message.status === 'pending',
   'border-destructive': isOutgoing.value && props.message.status === 'failed',
   relative: isOutgoing.value,

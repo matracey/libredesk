@@ -24,6 +24,42 @@ const message = {
   type: 'incoming'
 }
 
+const parseRgb = (value) =>
+  value
+    .match(/[\d.]+/g)
+    .slice(0, 3)
+    .map(Number)
+
+const relativeLuminance = (rgb) => {
+  const channels = rgb.map((value) => {
+    const channel = value / 255
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  })
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+}
+
+const contrastRatio = (foreground, background) => {
+  const lighter = Math.max(relativeLuminance(foreground), relativeLuminance(background))
+  const darker = Math.min(relativeLuminance(foreground), relativeLuminance(background))
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+const opaqueBackground = (element) => {
+  let current = element
+  while (current) {
+    const value = getComputedStyle(current).backgroundColor
+    const channels = value.match(/[\d.]+/g)?.map(Number) ?? []
+    if (channels.length >= 3 && (channels[3] ?? 1) === 1) return channels.slice(0, 3)
+    current = current.parentElement
+  }
+  return [255, 255, 255]
+}
+
+const expectNonTextContrast = (element) => {
+  const foreground = parseRgb(getComputedStyle(element).color)
+  expect(contrastRatio(foreground, opaqueBackground(element))).to.be.at.least(3)
+}
+
 const mountMessage = ({
   darkMode,
   direction = 'incoming',
@@ -74,7 +110,7 @@ const mountMessage = ({
         CSATResponseDisplay: true,
         ImageLightbox: true,
         Tooltip: { template: '<div><slot /></div>' },
-        TooltipContent: { template: '<div><slot /></div>' },
+        TooltipContent: { template: '<div hidden><slot /></div>' },
         TooltipTrigger: { template: '<div><slot /></div>' }
       }
     }
@@ -108,29 +144,53 @@ describe('MessageBubble email color toggle', () => {
   it('switches an incoming HTML email between dark and original colors', () => {
     mountMessage({ darkMode: true })
 
+    let normalizedButtonBackground
     cy.get('[data-cy="email-color-toggle"]')
-      .should('contain.text', 'Show original colors')
+      .should('have.attr', 'aria-label', 'Show original colors')
+      .and('have.attr', 'title', 'Show original colors')
       .and('have.attr', 'aria-pressed', 'false')
+      .and('have.css', 'width', '28px')
+      .and('have.css', 'height', '28px')
+      .then(($button) => {
+        normalizedButtonBackground = getComputedStyle($button[0]).backgroundColor
+        expectNonTextContrast($button[0])
+      })
+    cy.get('[data-cy="email-color-toggle"] svg').should('have.attr', 'aria-hidden', 'true')
+    cy.get('[data-cy="email-color-toggle"] .sr-only').should('have.text', 'Show original colors')
     cy.contains('.native-html p', 'This email keeps its original colors.').should(
       'not.have.css',
       'color',
       'rgb(0, 0, 0)'
     )
+    cy.get('.message-bubble').should('not.have.css', 'background-color', 'rgb(255, 255, 255)')
     cy.screenshot('email-colors-normalized')
 
     cy.get('[data-cy="email-color-toggle"]').click()
 
     cy.get('[data-cy="email-color-toggle"]')
-      .should('contain.text', 'Use dark mode colors')
+      .should('have.attr', 'aria-label', 'Use dark mode colors')
+      .and('have.attr', 'title', 'Use dark mode colors')
       .and('have.attr', 'aria-pressed', 'true')
+      .and('have.css', 'width', '28px')
+      .and('have.css', 'height', '28px')
+      .then(($button) => {
+        expect(getComputedStyle($button[0]).backgroundColor).not.to.equal(
+          normalizedButtonBackground
+        )
+        expectNonTextContrast($button[0])
+      })
     cy.contains('.native-html p', 'This email keeps its original colors.').should(
       'have.css',
       'color',
       'rgb(0, 0, 0)'
     )
+    cy.get('.message-bubble')
+      .should('have.css', 'background-color', 'rgb(255, 255, 255)')
+      .and('have.css', 'color', 'rgb(10, 10, 10)')
     cy.screenshot('email-colors-original')
 
-    cy.get('[data-cy="email-color-toggle"]').click()
+    cy.get('[data-cy="email-color-toggle"]').focus()
+    cy.focused().type('{enter}')
     cy.contains('.native-html p', 'This email keeps its original colors.').should(
       'not.have.css',
       'color',
