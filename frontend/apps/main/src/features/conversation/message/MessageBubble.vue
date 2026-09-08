@@ -2,54 +2,34 @@
   <div class="flex flex-col text-left" :class="isOutgoing ? 'items-end' : 'items-start'">
     <!-- Sender Name -->
     <div
-      v-if="!groupWithPrev || showEmailColorToggle"
+      v-if="!groupWithPrev"
       class="mb-1 flex items-center gap-1"
       :class="isOutgoing ? 'pr-2 md:pr-[47px]' : 'pl-10 md:pl-[47px]'"
     >
-      <template v-if="!groupWithPrev">
-        <router-link
-          v-if="!isOutgoing"
-          :to="{ name: 'contact-detail', params: { id: message.author?.id } }"
-          class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
-        >
-          {{ getFullName }}
-        </router-link>
-        <router-link
-          v-else-if="canManageAI"
-          :to="aiAssistantRoute"
-          class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
-        >
-          {{ getFullName }}
-        </router-link>
-        <router-link
-          v-else-if="canManageUsers"
-          :to="{ name: 'edit-agent', params: { id: message.author?.id } }"
-          class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
-        >
-          {{ getFullName }}
-        </router-link>
-        <p v-else class="text-muted-foreground text-sm font-medium">
-          {{ getFullName }}
-        </p>
-      </template>
-
-      <Button
-        v-if="showEmailColorToggle"
-        type="button"
-        size="icon"
-        variant="ghost"
-        class="h-7 w-7 flex-shrink-0 text-muted-foreground focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-        :class="{ 'bg-accent text-accent-foreground': showOriginalEmailColors }"
-        data-cy="email-color-toggle"
-        :title="emailColorToggleLabel"
-        :aria-label="emailColorToggleLabel"
-        :aria-pressed="showOriginalEmailColors"
-        @click="showOriginalEmailColors = !showOriginalEmailColors"
+      <router-link
+        v-if="!isOutgoing"
+        :to="{ name: 'contact-detail', params: { id: message.author?.id } }"
+        class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
       >
-        <Moon v-if="showOriginalEmailColors" aria-hidden="true" />
-        <Sun v-else aria-hidden="true" />
-        <span class="sr-only">{{ emailColorToggleLabel }}</span>
-      </Button>
+        {{ getFullName }}
+      </router-link>
+      <router-link
+        v-else-if="canManageAI"
+        :to="aiAssistantRoute"
+        class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
+      >
+        {{ getFullName }}
+      </router-link>
+      <router-link
+        v-else-if="canManageUsers"
+        :to="{ name: 'edit-agent', params: { id: message.author?.id } }"
+        class="cursor-pointer text-muted-foreground text-sm font-medium hover:underline hover:text-foreground transition-colors duration-200"
+      >
+        {{ getFullName }}
+      </router-link>
+      <p v-else class="text-muted-foreground text-sm font-medium">
+        {{ getFullName }}
+      </p>
     </div>
 
     <!-- Message Bubble -->
@@ -107,6 +87,33 @@
             {{ message.content }}
           </div>
           <template v-else>
+            <div
+              v-if="showEmailColorToggle"
+              class="-mr-2 -mt-1 mb-1 flex h-7 justify-end"
+              data-cy="email-color-actions"
+            >
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                class="h-7 w-7 flex-shrink-0 focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                :class="
+                  showOriginalEmailColors
+                    ? 'bg-neutral-200 text-neutral-900 hover:bg-neutral-300 hover:text-neutral-950'
+                    : 'text-muted-foreground'
+                "
+                data-cy="email-color-toggle"
+                :title="emailColorToggleLabel"
+                :aria-label="emailColorToggleLabel"
+                :aria-pressed="showOriginalEmailColors"
+                @click="showOriginalEmailColors = !showOriginalEmailColors"
+              >
+                <Moon v-if="showOriginalEmailColors" aria-hidden="true" />
+                <Sun v-else aria-hidden="true" />
+                <span class="sr-only">{{ emailColorToggleLabel }}</span>
+              </Button>
+            </div>
+
             <!-- Message Envelope -->
             <MessageEnvelope :message="message" v-if="showEnvelope" />
 

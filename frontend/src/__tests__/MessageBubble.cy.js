@@ -64,7 +64,8 @@ const mountMessage = ({
   darkMode,
   direction = 'incoming',
   contentType = 'html',
-  content = message.content
+  content = message.content,
+  groupWithPrev = false
 }) => {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -93,7 +94,8 @@ const mountMessage = ({
         type: direction
       },
       direction,
-      darkMode
+      darkMode,
+      groupWithPrev
     },
     global: {
       plugins: [createPinia(), router, i18n],
@@ -141,6 +143,13 @@ describe('MessageBubble email color toggle', () => {
     cy.get('[data-cy="email-color-toggle"]').should('not.exist')
   })
 
+  it('keeps the toggle with a grouped message when the sender name is hidden', () => {
+    mountMessage({ darkMode: true, groupWithPrev: true })
+
+    cy.contains('a', 'Alex Morgan').should('not.exist')
+    cy.get('.message-bubble [data-cy="email-color-toggle"]').should('be.visible')
+  })
+
   it('switches an incoming HTML email between dark and original colors', () => {
     mountMessage({ darkMode: true })
 
@@ -157,6 +166,14 @@ describe('MessageBubble email color toggle', () => {
       })
     cy.get('[data-cy="email-color-toggle"] svg').should('have.attr', 'aria-hidden', 'true')
     cy.get('[data-cy="email-color-toggle"] .sr-only').should('have.text', 'Show original colors')
+    cy.get('[data-cy="email-color-toggle"]').parents('.message-bubble').should('have.length', 1)
+    cy.get('[data-cy="email-color-actions"]').then(($actions) => {
+      cy.get('.native-html p').then(($message) => {
+        expect($actions[0].getBoundingClientRect().bottom).to.be.at.most(
+          $message[0].getBoundingClientRect().top
+        )
+      })
+    })
     cy.contains('.native-html p', 'This email keeps its original colors.').should(
       'not.have.css',
       'color',
