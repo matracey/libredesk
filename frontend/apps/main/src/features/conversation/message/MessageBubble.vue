@@ -93,6 +93,23 @@
             <hr class="mb-2 border-muted-foreground/20" v-if="showEnvelope" />
 
             <!-- Message Content -->
+            <div v-if="showEmailColorToggle" class="mb-1 flex justify-end">
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                class="h-7 px-2 text-muted-foreground hover:text-foreground"
+                data-cy="email-color-toggle"
+                :aria-label="emailColorToggleLabel"
+                :aria-pressed="showOriginalEmailColors"
+                @click="showOriginalEmailColors = !showOriginalEmailColors"
+              >
+                <Moon v-if="showOriginalEmailColors" :size="13" />
+                <Sun v-else :size="13" />
+                {{ emailColorToggleLabel }}
+              </Button>
+            </div>
+
             <div
               ref="contentWrapperEl"
               class="relative"
@@ -107,7 +124,7 @@
               </div>
               <div v-else ref="messageContentEl" @click="onMessageContentClick">
                 <Letter
-                  :key="darkMode ? 'dark' : 'light'"
+                  :key="useNormalizedEmailColors ? 'dark' : 'original'"
                   :html="renderedHtmlContent"
                   :allowedSchemas="allowedSchemas"
                   :rewriteExternalLinks="rewriteMessageLink"
@@ -273,7 +290,7 @@ import { computed, ref, onMounted, nextTick, watch } from 'vue'
 import { useConversationStore } from '@main/stores/conversation'
 import { useUserStore } from '@main/stores/user'
 import { useI18n } from 'vue-i18n'
-import { Lock, Mail, RotateCcw, Check, CheckCheck, Maximize2, Trash2, MoreHorizontal } from 'lucide-vue-next'
+import { Lock, Mail, RotateCcw, Check, CheckCheck, Maximize2, Trash2, MoreHorizontal, Moon, Sun } from 'lucide-vue-next'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -320,9 +337,8 @@ const measureExpandable = () => {
 }
 
 // Email HTML images change height after initial paint - re-measure on load. Also re-run
-// whenever the content DOM is (re)created, since a dark-mode toggle remounts the Letter
-// subtree (see the `props.darkMode` watcher below) and any images it inserts are fresh
-// elements with no listener attached yet.
+// whenever the content DOM is (re)created, since changing its color mode remounts the
+// Letter subtree and any images it inserts are fresh elements with no listener attached.
 const attachImageLoadListeners = () => {
   const imgs = contentWrapperEl.value?.querySelectorAll?.('img') ?? []
   imgs.forEach((img) => {
@@ -412,18 +428,34 @@ const sanitizedContent = computed(() => {
   }
   return props.message.content || ''
 })
+const showOriginalEmailColors = ref(false)
+const showEmailColorToggle = computed(
+  () => props.darkMode && !isOutgoing.value && props.message.content_type !== 'text'
+)
+const useNormalizedEmailColors = computed(() => props.darkMode && !showOriginalEmailColors.value)
+const emailColorToggleLabel = computed(() =>
+  t(
+    showOriginalEmailColors.value
+      ? 'conversation.useDarkEmailColors'
+      : 'conversation.showOriginalEmailColors'
+  )
+)
 const renderedHtmlContent = computed(() =>
-  normalizeEmailHtml(sanitizedContent.value, props.darkMode)
+  normalizeEmailHtml(sanitizedContent.value, useNormalizedEmailColors.value)
 )
 
 // Letter captures its sanitized HTML during setup and does not react to prop changes.
-// Remount it on theme changes, then reconnect image load measurement to the new DOM.
+// Remount it when the rendered color mode changes, then reconnect image load measurement.
+watch(useNormalizedEmailColors, async () => {
+  await nextTick()
+  measureExpandable()
+  attachImageLoadListeners()
+})
+
 watch(
   () => props.darkMode,
-  async () => {
-    await nextTick()
-    measureExpandable()
-    attachImageLoadListeners()
+  (darkMode) => {
+    if (!darkMode) showOriginalEmailColors.value = false
   }
 )
 
