@@ -24,7 +24,12 @@ const message = {
   type: 'incoming'
 }
 
-const mountMessage = ({ darkMode, direction = 'incoming', contentType = 'html' }) => {
+const mountMessage = ({
+  darkMode,
+  direction = 'incoming',
+  contentType = 'html',
+  content = message.content
+}) => {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/', name: 'contact-detail', component: { template: '<div />' } }]
@@ -47,6 +52,7 @@ const mountMessage = ({ darkMode, direction = 'incoming', contentType = 'html' }
     props: {
       message: {
         ...message,
+        content,
         content_type: contentType,
         type: direction
       },
@@ -76,6 +82,29 @@ const mountMessage = ({ darkMode, direction = 'incoming', contentType = 'html' }
 }
 
 describe('MessageBubble email color toggle', () => {
+  it('does not show the toggle in light mode', () => {
+    mountMessage({ darkMode: false })
+
+    cy.get('[data-cy="email-color-toggle"]').should('not.exist')
+    cy.contains('.native-html p', 'This email keeps its original colors.').should(
+      'have.css',
+      'color',
+      'rgb(0, 0, 0)'
+    )
+  })
+
+  it('does not show the toggle for outgoing or plain-text messages', () => {
+    mountMessage({ darkMode: true, direction: 'outgoing' })
+    cy.get('[data-cy="email-color-toggle"]').should('not.exist')
+
+    mountMessage({
+      darkMode: true,
+      contentType: 'text',
+      content: 'This is a plain-text message.'
+    })
+    cy.get('[data-cy="email-color-toggle"]').should('not.exist')
+  })
+
   it('switches an incoming HTML email between dark and original colors', () => {
     mountMessage({ darkMode: true })
 
@@ -107,24 +136,5 @@ describe('MessageBubble email color toggle', () => {
       'color',
       'rgb(0, 0, 0)'
     )
-  })
-
-  it('does not show the toggle in light mode', () => {
-    mountMessage({ darkMode: false })
-
-    cy.get('[data-cy="email-color-toggle"]').should('not.exist')
-    cy.contains('.native-html p', 'This email keeps its original colors.').should(
-      'have.css',
-      'color',
-      'rgb(0, 0, 0)'
-    )
-  })
-
-  it('does not show the toggle for outgoing or plain-text messages', () => {
-    mountMessage({ darkMode: true, direction: 'outgoing' })
-    cy.get('[data-cy="email-color-toggle"]').should('not.exist')
-
-    mountMessage({ darkMode: true, contentType: 'text' })
-    cy.get('[data-cy="email-color-toggle"]').should('not.exist')
   })
 })
