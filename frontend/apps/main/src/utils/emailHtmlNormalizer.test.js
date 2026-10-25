@@ -17,6 +17,10 @@ const parseFragment = (html) => {
   return template.content
 }
 
+const normalize = (html) => parseFragment(normalizeEmailHtml(html, true))
+const expectContrast = (foreground, background = 'hsl(120 2.6% 7.6%)') =>
+  expect(getContrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5)
+
 describe('normalizeEmailHtml', () => {
   test.each([
     'outlook-desktop',
@@ -30,141 +34,172 @@ describe('normalizeEmailHtml', () => {
   })
 
   test('normalizes Outlook desktop inline colours', () => {
-    const output = parseFragment(normalizeEmailHtml(loadFixture('outlook-desktop'), true))
+    const output = normalize(loadFixture('outlook-desktop'))
     const container = output.querySelector('div')
     const paragraphs = output.querySelectorAll('p')
 
-    expect(
-      getContrastRatio(container.style.color, container.style.backgroundColor)
-    ).toBeGreaterThanOrEqual(4.5)
-    expect(
-      getContrastRatio(paragraphs[0].style.color, container.style.backgroundColor)
-    ).toBeGreaterThanOrEqual(4.5)
+    expectContrast(container.style.color, container.style.backgroundColor)
+    expectContrast(paragraphs[0].style.color, container.style.backgroundColor)
     const warning = parseCssColor(paragraphs[1].style.color)
     expect(warning.r).toBeGreaterThan(0.9)
     expect(warning.g).toBeLessThan(0.25)
     expect(warning.b).toBeLessThan(0.25)
   })
 
+  test.each(['CanvasText', 'rgb(calc(10 + 10), 0, 0)', 'hsl(calc(60 * 2) 100% 10%)'])(
+    'normalizes browser-native %s text against the conversation surface',
+    (color) => {
+      const output = normalize(`<div style="color:${color};background-color:#fff">Copy</div>`)
+      const element = output.querySelector('div')
+      expect(element.style.backgroundColor).toBe('transparent')
+      expectContrast(element.style.color)
+    }
+  )
+
   test('normalizes Gmail style blocks and quoted content', () => {
-    const output = parseFragment(normalizeEmailHtml(loadFixture('gmail-reply'), true))
+    const output = normalize(loadFixture('gmail-reply'))
     const stylesheet = output.querySelector('style').textContent
     const quotedColor = output.querySelector('.gmail_quote div').style.color
 
     expect(stylesheet).toContain('color: hsl(')
-    expect(stylesheet).toContain('background-color: hsl(')
-    expect(getContrastRatio(quotedColor, 'hsl(120 2.6% 7.6%)')).toBeGreaterThanOrEqual(4.5)
+    expect(stylesheet).toContain('background-color: transparent')
+    expectContrast(quotedColor)
   })
 
   test('enforces contrast across separate stylesheet rules', () => {
-    const output = parseFragment(
-      normalizeEmailHtml(
-        '<style>.surface { background-color: #777777; } .copy { color: #888888; }</style><div class="surface"><span class="copy">Copy</span></div>',
-        true
-      )
+    const output = normalize(
+      '<style>.surface { background-color: #777777; } .copy { color: #888888; }</style><div class="surface"><span class="copy">Copy</span></div>'
     )
     const background = output
       .querySelector('style')
       .textContent.match(/background-color:\s*([^;}]+)/)[1]
     const foreground = output.querySelector('.copy').style.color
 
-    expect(getContrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5)
+    expectContrast(foreground, background)
+  })
+
+  test('aggregates repeated selectors before updating matching elements', () => {
+    const rules = Array.from(
+      { length: 40 },
+      (_, index) => `.copy { color: rgb(${index}, 0, 0) }`
+    ).join('')
+    const set = vi.spyOn(WeakMap.prototype, 'set')
+    try {
+      normalize(`<style>${rules}</style>${'<p class="copy">Copy</p>'.repeat(20)}`)
+      const updates = set.mock.calls.filter(
+        ([element, styles]) => element?.tagName === 'P' && styles?.color?.specificity
+      )
+      expect(updates).toHaveLength(40)
+    } finally {
+      set.mockRestore()
+    }
+  })
+
+  test.each([
+    ['importance', '.copy{color:#000!important}.copy{color:#f00}', '.copy{color:#000!important}'],
+    ['source order', '.copy{color:#000}.copy{color:#f00}', '.copy{color:#f00}'],
+    ['specificity', 'div.copy{color:#000}.copy{color:#f00}', 'div.copy{color:#000}'],
+    ['equal specificity', '.copy{color:#000}.alt{color:#f00}', '.alt{color:#f00}']
+  ])('preserves %s when aggregating selectors', (_name, rules, winner) => {
+    const color = (css) =>
+      normalize(
+        `<style>${css}</style><div style="background-image:url(hero.png)">` +
+          '<div class="copy alt">Banner</div></div><div class="copy alt" data-test="regular">Copy</div>'
+      ).querySelector('[data-test="regular"]').style.color
+    expect(color(rules)).toBe(color(winner))
+    expect(color(rules)).not.toBe('')
   })
 
   test('normalizes Apple Mail presentational attributes', () => {
-    const output = parseFragment(normalizeEmailHtml(loadFixture('apple-mail'), true))
-    const container = output.querySelector('[bgcolor]')
+    const output = normalize(loadFixture('apple-mail'))
+    const container = output.querySelector('div')
     const font = output.querySelector('font')
     const previousMessage = output.querySelector('div div')
 
-    expect(container.getAttribute('bgcolor')).toMatch(/^#[\da-f]{6}$/)
+    expect(container.hasAttribute('bgcolor')).toBe(false)
     expect(font.getAttribute('color')).toMatch(/^#[\da-f]{6}$/)
-    expect(
-      getContrastRatio(font.getAttribute('color'), container.getAttribute('bgcolor'))
-    ).toBeGreaterThanOrEqual(4.5)
-    expect(
-      getContrastRatio(previousMessage.style.color, previousMessage.style.backgroundColor)
-    ).toBeGreaterThanOrEqual(4.5)
+    expectContrast(font.getAttribute('color'))
+    expectContrast(previousMessage.style.color, previousMessage.style.backgroundColor)
   })
 
   test('checks inline text against an element bgcolor', () => {
-    const output = parseFragment(
-      normalizeEmailHtml('<td bgcolor="#000000" style="color: #ffffff">Copy</td>', true)
-    )
+    const output = normalize('<td bgcolor="#000000" style="color: #ffffff">Copy</td>')
     const cell = output.querySelector('td')
 
-    expect(getContrastRatio(cell.style.color, cell.getAttribute('bgcolor'))).toBeGreaterThanOrEqual(
-      4.5
-    )
+    expectContrast(cell.style.color, cell.getAttribute('bgcolor'))
   })
 
   test('checks nested text against the composited background', () => {
-    const output = parseFragment(
-      normalizeEmailHtml(
-        '<div style="background-color: rgba(255, 255, 255, 0.5)"><span style="color: #777777">Copy</span></div>',
-        true
-      )
+    const output = normalize(
+      '<div style="background-color: rgba(255, 255, 255, 0.5)"><span style="color: #777777">Copy</span></div>'
     )
     const container = output.querySelector('div')
     const text = output.querySelector('span')
     const background = compositeCssColor(container.style.backgroundColor, 'hsl(120 2.6% 7.6%)')
 
-    expect(getContrastRatio(text.style.color, background)).toBeGreaterThanOrEqual(4.5)
+    expectContrast(text.style.color, background)
   })
 
   test('normalizes a color-only background shorthand with its text color', () => {
-    const output = parseFragment(
-      normalizeEmailHtml(
-        '<div style="background: #ffffff; color: #000000"><span style="color: #000000">Copy</span></div>',
-        true
-      )
+    const output = normalize(
+      '<div style="background: #ffffff; color: #000000"><span style="color: #000000">Copy</span></div>'
     )
     const container = output.querySelector('div')
     const text = output.querySelector('span')
 
-    expect(
-      getContrastRatio(container.style.color, container.style.backgroundColor)
-    ).toBeGreaterThanOrEqual(4.5)
-    expect(
-      getContrastRatio(text.style.color, container.style.backgroundColor)
-    ).toBeGreaterThanOrEqual(4.5)
+    expectContrast(container.style.color, container.style.backgroundColor)
+    expectContrast(text.style.color, container.style.backgroundColor)
   })
 
   test('normalizes a color-only background shorthand in a style block', () => {
-    const output = parseFragment(
-      normalizeEmailHtml(
-        '<style>.surface { background: #ffffff; color: #000000; }</style><div class="surface">Copy</div>',
-        true
-      )
+    const output = normalize(
+      '<style>.surface { background: #ffffff; color: #000000; }</style><div class="surface">Copy</div>'
     )
     const stylesheet = output.querySelector('style').textContent
     const background = stylesheet.match(/background-color:\s*([^;}]+)/)[1]
     const foreground = stylesheet.match(/(?:^|;)\s*color:\s*([^;}]+)/)[1]
 
-    expect(getContrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5)
+    expectContrast(foreground, background)
+  })
+
+  test.each(['#fff', '#f5f5f5', '#f2f2f7', 'rgb(255, 255, 255)'])(
+    'lets the conversation surface show through a plain %s email canvas',
+    (background) => {
+      const input = `<div style="background: ${background}; color: #000"><p>Copy</p></div>`
+      const output = normalize(input)
+      const container = output.querySelector('div')
+
+      expect(container.style.backgroundColor).toBe('transparent')
+      expectContrast(container.style.color)
+      expect(normalizeEmailHtml(input, false)).toBe(input)
+    }
+  )
+
+  test('retains colored sections while clearing nested neutral canvases', () => {
+    const output = normalize(
+      '<div style="background-color:#edf3ff"><div style="background-color:#fff;color:#000">Copy</div></div>'
+    )
+    const section = output.querySelector('div')
+    const copy = section.querySelector('div')
+
+    expect(parseCssColor(section.style.backgroundColor).a).toBe(1)
+    expect(copy.style.backgroundColor).toBe('transparent')
+    expectContrast(copy.style.color, section.style.backgroundColor)
   })
 
   test('uses the important inline background when checking descendant contrast', () => {
-    const output = parseFragment(
-      normalizeEmailHtml(
-        '<div style="background-color: #ffffff !important; background-color: #000000"><span style="color: #000000">Copy</span></div>',
-        true
-      )
+    const output = normalize(
+      '<div style="background-color: #ffffff !important; background-color: #000000"><span style="color: #000000">Copy</span></div>'
     )
     const container = output.querySelector('div')
     const text = output.querySelector('span')
 
-    expect(
-      getContrastRatio(text.style.color, container.style.backgroundColor)
-    ).toBeGreaterThanOrEqual(4.5)
+    expectContrast(text.style.color, container.style.backgroundColor)
   })
 
   test('leaves legacy attributes untouched when CSS overrides them', () => {
-    const output = parseFragment(
-      normalizeEmailHtml(
-        '<div bgcolor="#ffffff" style="background-color: #000000"><font color="#000000" style="color: #ffffff">Copy</font></div>',
-        true
-      )
+    const output = normalize(
+      '<div bgcolor="#ffffff" style="background-color: #000000"><font color="#000000" style="color: #ffffff">Copy</font></div>'
     )
 
     expect(output.querySelector('div').getAttribute('bgcolor')).toBe('#ffffff')
@@ -198,7 +233,7 @@ describe('normalizeEmailHtml', () => {
   })
 
   test('preserves colours inside image-backed marketing banners', () => {
-    const output = parseFragment(normalizeEmailHtml(loadFixture('marketing-banner'), true))
+    const output = normalize(loadFixture('marketing-banner'))
     const gradientBanner = output.querySelector('[style*="background-image"]')
     const shorthandBanner = output.querySelector('[style*="texture.png"]')
     const stylesheetBanner = output.querySelector('.hero')
@@ -220,14 +255,11 @@ describe('normalizeEmailHtml', () => {
   })
 
   test('normalizes ordinary targets of a rule shared with an image-backed banner', () => {
-    const output = parseFragment(
-      normalizeEmailHtml(
-        '<style>.card { color: #000000; background-color: #ffffff; }</style>' +
-          '<div style="background-image: url(https://cdn.example.com/hero.jpg)">' +
-          '<div id="banner-card" class="card">Banner</div></div>' +
-          '<div id="regular-card" class="card">Regular</div>',
-        true
-      )
+    const output = normalize(
+      '<style>.card { color: #000000; background-color: #ffffff; }</style>' +
+        '<div style="background-image: url(https://cdn.example.com/hero.jpg)">' +
+        '<div id="banner-card" class="card">Banner</div></div>' +
+        '<div id="regular-card" class="card">Regular</div>'
     )
     const stylesheet = output.querySelector('style').textContent
     const banner = output.querySelector('#banner-card')
@@ -237,16 +269,22 @@ describe('normalizeEmailHtml', () => {
     expect(stylesheet).toContain('background-color: #ffffff')
     expect(banner.getAttribute('style')).toBeNull()
     expect(regular.style.backgroundColor).not.toBe('rgb(255, 255, 255)')
-    expect(
-      getContrastRatio(regular.style.color, regular.style.backgroundColor)
-    ).toBeGreaterThanOrEqual(4.5)
+    expectContrast(regular.style.color, regular.style.backgroundColor)
   })
 
-  test('keeps legacy table background images through sanitization', () => {
-    const normalized = normalizeEmailHtml(
+  test.each([
+    [
+      'legacy table',
       '<table><tr><td background="https://cdn.example.com/banner.jpg"><font color="#ffffff">Copy</font></td></tr></table>',
-      true
-    )
+      'banner.jpg'
+    ],
+    [
+      'nested table-cell',
+      '<div style="background-image: url(https://cdn.example.com/hero.jpg)"><table><tr><td background="https://cdn.example.com/cell.jpg"><font color="#ffffff">Copy</font></td></tr></table></div>',
+      'cell.jpg'
+    ]
+  ])('keeps %s background images through sanitization', (_name, html, image) => {
+    const normalized = normalizeEmailHtml(html, true)
     const sanitized = sanitize(normalized, null, {
       noWrapper: true,
       allowedSchemas: ['cid', 'https', 'http', 'mailto'],
@@ -254,7 +292,7 @@ describe('normalizeEmailHtml', () => {
     })
     const output = parseFragment(sanitized)
 
-    expect(output.querySelector('td').style.backgroundImage).toContain('banner.jpg')
+    expect(output.querySelector('td').style.backgroundImage).toContain(image)
   })
 
   test('handles deeply nested reply chains without recursive traversal', () => {
@@ -266,29 +304,9 @@ describe('normalizeEmailHtml', () => {
     expect(() => normalizeEmailHtml(input, true)).not.toThrow()
   })
 
-  test('keeps a nested table-cell background image through sanitization', () => {
-    const normalized = normalizeEmailHtml(
-      '<div style="background-image: url(https://cdn.example.com/hero.jpg)">' +
-        '<table><tr><td background="https://cdn.example.com/cell.jpg">' +
-        '<font color="#ffffff">Copy</font></td></tr></table></div>',
-      true
-    )
-    const sanitized = sanitize(normalized, null, {
-      noWrapper: true,
-      allowedSchemas: ['cid', 'https', 'http', 'mailto'],
-      allowedCssProperties
-    })
-    const output = parseFragment(sanitized)
-
-    expect(output.querySelector('td').style.backgroundImage).toContain('cell.jpg')
-  })
-
   test('does not protect a table cell with a blank legacy background attribute', () => {
-    const output = parseFragment(
-      normalizeEmailHtml(
-        '<table><tr><td background="  " style="color: #000000">Copy</td></tr></table>',
-        true
-      )
+    const output = normalize(
+      '<table><tr><td background="  " style="color: #000000">Copy</td></tr></table>'
     )
 
     expect(output.querySelector('td').style.color).not.toBe('rgb(0, 0, 0)')
@@ -297,7 +315,7 @@ describe('normalizeEmailHtml', () => {
   test('leaves prefers-color-scheme media blocks untouched', () => {
     const input =
       '<style>@media (prefers-color-scheme: dark) { .a { color: #eeeeee; background-color: #111111; } } .b { color: #222222; }</style><div class="a">Dark</div><div class="b">Light</div>'
-    const output = parseFragment(normalizeEmailHtml(input, true))
+    const output = normalize(input)
     const stylesheet = output.querySelector('style').textContent
 
     expect(stylesheet).toContain('color: #eeeeee')
@@ -321,9 +339,7 @@ describe('normalizeEmailHtml', () => {
   })
 
   test('does not add a style attribute to non-content elements while walking the tree', () => {
-    const output = parseFragment(
-      normalizeEmailHtml('<style>.a { color: #222222; }</style><div class="a">Text</div>', true)
-    )
+    const output = normalize('<style>.a { color: #222222; }</style><div class="a">Text</div>')
     const styleEl = output.querySelector('style')
 
     expect(styleEl.getAttribute('style')).toBeNull()
