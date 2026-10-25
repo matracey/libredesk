@@ -1,3 +1,8 @@
+import { modeHsl, modeLrgb, modeRgb, useMode, wcagLuminance } from 'culori/fn'
+
+const toRgb = useMode(modeRgb)
+const toHsl = useMode(modeHsl)
+useMode(modeLrgb)
 const DARK_MIN_LIGHTNESS = 0.08
 const DARK_MAX_LIGHTNESS = 0.92
 const MIN_CONTRAST_RATIO = 4.5
@@ -70,43 +75,13 @@ const splitFunctionalColor = (body) => {
 }
 
 const hslToRgb = ({ h, s, l, a = 1 }) => {
-  const chroma = (1 - Math.abs(2 * l - 1)) * s
-  const hue = h / 60
-  const x = chroma * (1 - Math.abs((hue % 2) - 1))
-  let red = 0
-  let green = 0
-  let blue = 0
-
-  if (hue < 1) [red, green] = [chroma, x]
-  else if (hue < 2) [red, green] = [x, chroma]
-  else if (hue < 3) [green, blue] = [chroma, x]
-  else if (hue < 4) [green, blue] = [x, chroma]
-  else if (hue < 5) [red, blue] = [x, chroma]
-  else [red, blue] = [chroma, x]
-
-  const match = l - chroma / 2
-  return { r: red + match, g: green + match, b: blue + match, a }
+  const { r, g, b } = toRgb({ mode: 'hsl', h, s, l })
+  return { r, g, b, a }
 }
 
 const rgbToHsl = ({ r, g, b, a = 1 }) => {
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const delta = max - min
-  const l = (max + min) / 2
-  let h = 0
-
-  if (delta !== 0) {
-    if (max === r) h = 60 * (((g - b) / delta) % 6)
-    else if (max === g) h = 60 * ((b - r) / delta + 2)
-    else h = 60 * ((r - g) / delta + 4)
-  }
-
-  return {
-    h: (h + 360) % 360,
-    s: delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1)),
-    l,
-    a
-  }
+  const hsl = toHsl({ mode: 'rgb', r, g, b })
+  return { h: hsl.h ?? 0, s: hsl.s, l: hsl.l, a }
 }
 
 const parseHexColor = (value) => {
@@ -254,33 +229,16 @@ export const compositeCssColor = (foregroundValue, backgroundValue) => {
   return formatHslColor(rgbToHsl(composite(foreground, background)))
 }
 
-const linearize = (channel) =>
-  channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
-
-const relativeLuminance = ({ r, g, b }) =>
-  0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
+const relativeLuminance = (color) => wcagLuminance({ ...color, mode: 'rgb' })
 
 const contrastRatio = (foreground, background) => {
   const opaqueBackground =
     background.a === 1 ? background : composite(background, { r: 0, g: 0, b: 0, a: 1 })
-  const renderedForeground = composite(foreground, opaqueBackground)
-  const lighter = Math.max(
-    relativeLuminance(renderedForeground),
-    relativeLuminance(opaqueBackground)
-  )
-  const darker = Math.min(
-    relativeLuminance(renderedForeground),
-    relativeLuminance(opaqueBackground)
-  )
-  return (lighter + 0.05) / (darker + 0.05)
+  const first = relativeLuminance(composite(foreground, opaqueBackground))
+  const second = relativeLuminance(opaqueBackground)
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
 }
 
-/**
- * Returns the WCAG contrast ratio between two CSS colors.
- * @param {string} foregroundValue
- * @param {string} backgroundValue
- * @returns {number | null}
- */
 export const getContrastRatio = (foregroundValue, backgroundValue) => {
   const foreground = parseCssColor(foregroundValue)
   const background = parseCssColor(backgroundValue)
