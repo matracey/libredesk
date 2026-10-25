@@ -1,4 +1,4 @@
-import { modeHsl, modeLrgb, modeRgb, useMode, wcagLuminance } from 'culori/fn'
+import { modeHsl, modeLrgb, modeRgb, parse, parseNamed, useMode, wcagLuminance } from 'culori/fn'
 
 const toRgb = useMode(modeRgb)
 const toHsl = useMode(modeHsl)
@@ -8,19 +8,24 @@ const DARK_MAX_LIGHTNESS = 0.92
 const MIN_CONTRAST_RATIO = 4.5
 const CONTRAST_ROUNDING_MARGIN = 0.05
 const MAX_CACHE_ENTRIES = 512
-const CSS_WIDE_KEYWORDS = new Set([
-  'currentcolor',
-  'inherit',
-  'initial',
-  'revert',
-  'revert-layer',
-  'unset'
-])
-const parsedColorCache = new Map()
+const CONTEXTUAL_COLOR = /^(currentcolor|inherit|initial|revert(?:-layer)?|unset)$|\bvar\s*\(/i
+
 const remappedColorCache = new Map()
 const contrastColorCache = new Map()
 
 const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, value))
+
+const memoize = (compute, keyFor = (value) => value) => {
+  const cache = new Map()
+  return (...args) => {
+    const key = keyFor(...args)
+    if (cache.has(key)) return cache.get(key)
+    const value = compute(...args)
+    if (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value)
+    cache.set(key, value)
+    return value
+  }
+}
 
 const cacheValue = (cache, key, value) => {
   if (cache.size >= MAX_CACHE_ENTRIES) {
@@ -28,50 +33,6 @@ const cacheValue = (cache, key, value) => {
   }
   cache.set(key, value)
   return value
-}
-
-const parseAlpha = (value) => {
-  const trimmed = value.trim()
-  if (trimmed.endsWith('%')) {
-    return clamp(Number.parseFloat(trimmed) / 100)
-  }
-  return clamp(Number.parseFloat(trimmed))
-}
-
-const parseRgbChannel = (value) => {
-  const trimmed = value.trim()
-  if (trimmed.endsWith('%')) {
-    return clamp(Number.parseFloat(trimmed) / 100)
-  }
-  return clamp(Number.parseFloat(trimmed) / 255)
-}
-
-const parseHue = (value) => {
-  const trimmed = value.trim().toLowerCase()
-  let degrees = Number.parseFloat(trimmed)
-  if (trimmed.endsWith('turn')) degrees *= 360
-  else if (trimmed.endsWith('grad')) degrees *= 0.9
-  else if (trimmed.endsWith('rad')) degrees = (degrees * 180) / Math.PI
-  return ((degrees % 360) + 360) % 360
-}
-
-const splitFunctionalColor = (body) => {
-  if (body.includes(',')) {
-    const parts = body.split(',').map((part) => part.trim())
-    if (parts.length !== 3 && parts.length !== 4) {
-      return { channels: [], alpha: undefined }
-    }
-    return {
-      channels: parts.slice(0, 3),
-      alpha: parts[3]
-    }
-  }
-
-  const [channels, alpha] = body.split('/').map((part) => part.trim())
-  return {
-    channels: channels.split(/\s+/),
-    alpha
-  }
 }
 
 const hslToRgb = ({ h, s, l, a = 1 }) => {
@@ -84,116 +45,44 @@ const rgbToHsl = ({ r, g, b, a = 1 }) => {
   return { h: hsl.h ?? 0, s: hsl.s, l: hsl.l, a }
 }
 
-const parseHexColor = (value) => {
-  const match = value.match(/^#([\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i)
-  if (!match) return null
-
-  let hex = match[1]
-  if (hex.length <= 4) {
-    hex = [...hex].map((character) => character.repeat(2)).join('')
-  }
-
-  const channels = [
-    Number.parseInt(hex.slice(0, 2), 16),
-    Number.parseInt(hex.slice(2, 4), 16),
-    Number.parseInt(hex.slice(4, 6), 16)
-  ]
-
-  return {
-    r: channels[0] / 255,
-    g: channels[1] / 255,
-    b: channels[2] / 255,
-    a: hex.length === 8 ? Number.parseInt(hex.slice(6, 8), 16) / 255 : 1
-  }
-}
-
-const parseRgbColor = (value) => {
-  const match = value.match(/^rgba?\((.*)\)$/i)
-  if (!match) return null
-
-  const { channels, alpha } = splitFunctionalColor(match[1])
-  if (channels.length !== 3) return null
-
-  const parsedChannels = channels.map(parseRgbChannel)
-  const parsedAlpha = alpha === undefined ? 1 : parseAlpha(alpha)
-  if ([...parsedChannels, parsedAlpha].some((channel) => Number.isNaN(channel))) return null
-
-  return {
-    r: parsedChannels[0],
-    g: parsedChannels[1],
-    b: parsedChannels[2],
-    a: parsedAlpha
-  }
-}
-
-const parseHslColor = (value) => {
-  const match = value.match(/^hsla?\((.*)\)$/i)
-  if (!match) return null
-
-  const { channels, alpha } = splitFunctionalColor(match[1])
-  if (
-    channels.length !== 3 ||
-    !channels[1].trim().endsWith('%') ||
-    !channels[2].trim().endsWith('%')
-  ) {
-    return null
-  }
-
-  const hsl = {
-    h: parseHue(channels[0]),
-    s: clamp(Number.parseFloat(channels[1]) / 100),
-    l: clamp(Number.parseFloat(channels[2]) / 100),
-    a: alpha === undefined ? 1 : parseAlpha(alpha)
-  }
-
-  if (Object.values(hsl).some((channel) => Number.isNaN(channel))) return null
-  return hslToRgb(hsl)
-}
-
-const parseNamedColor = (value) => {
-  if (typeof document === 'undefined' || typeof window === 'undefined') return null
-
+const parseNativeColor = (value) => {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return undefined
   const probe = document.createElement('span')
+  probe.style.setProperty('color', value, 'important')
+  if (!probe.style.color) return undefined
+  probe.hidden = true
   try {
-    probe.style.color = value
-    if (!probe.style.color) return null
-
-    probe.hidden = true
     document.documentElement.appendChild(probe)
     const computed = window.getComputedStyle(probe).color
-    return parseRgbColor(computed)
-  } catch {
-    return null
+    return /^rgba?\(/i.test(computed) ? parse(computed) : undefined
   } finally {
     probe.remove()
   }
 }
 
-/**
- * Parses a CSS color into RGBA channels scaled from 0 to 1.
- * @param {string} value
- * @returns {{r: number, g: number, b: number, a: number} | null}
- */
-export const parseCssColor = (value) => {
-  if (typeof value !== 'string') return null
-
-  const trimmed = value.trim()
-  const lower = trimmed.toLowerCase()
-  if (parsedColorCache.has(lower)) return parsedColorCache.get(lower)
-  if (!trimmed || CSS_WIDE_KEYWORDS.has(lower)) {
-    return cacheValue(parsedColorCache, lower, null)
-  }
+const parseNormalizedColor = memoize((lower) => {
+  if (CONTEXTUAL_COLOR.test(lower)) return null
   if (lower === 'transparent') {
-    return cacheValue(parsedColorCache, lower, Object.freeze({ r: 0, g: 0, b: 0, a: 0 }))
+    return Object.freeze({ r: 0, g: 0, b: 0, a: 0 })
   }
+  let color = /^[a-z]+$/.test(lower)
+    ? parseNamed(lower)
+    : /^(#|rgba?\(|hsla?\()/.test(lower)
+      ? parse(lower)
+      : undefined
+  color ||= parseNativeColor(lower)
+  if (color?.mode === 'hsl') {
+    color = { ...color, s: clamp(color.s), l: clamp(color.l) }
+  }
+  const rgb = color && toRgb(color)
+  const channels = rgb && [rgb.r, rgb.g, rgb.b, rgb.alpha ?? 1]
+  return channels?.every(Number.isFinite)
+    ? Object.freeze({ r: clamp(rgb.r), g: clamp(rgb.g), b: clamp(rgb.b), a: clamp(rgb.alpha ?? 1) })
+    : null
+})
 
-  const parsed =
-    parseHexColor(trimmed) ||
-    parseRgbColor(trimmed) ||
-    parseHslColor(trimmed) ||
-    parseNamedColor(trimmed)
-  return cacheValue(parsedColorCache, lower, parsed ? Object.freeze(parsed) : null)
-}
+export const parseCssColor = (value) =>
+  typeof value === 'string' ? parseNormalizedColor(value.trim().toLowerCase()) : null
 
 const formatNumber = (value, precision = 2) => Number(value.toFixed(precision)).toString()
 
