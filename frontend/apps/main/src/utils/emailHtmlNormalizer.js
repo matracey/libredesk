@@ -1,3 +1,4 @@
+import { serializeHex } from 'culori/fn'
 import {
   compositeCssColor,
   ensureColorContrast,
@@ -246,6 +247,12 @@ const compareSpecificity = (left, right) => {
   return 0
 }
 
+const declarationWins = (candidate, current) =>
+  !current ||
+  (Number(candidate.important) - Number(current.important) ||
+    compareSpecificity(candidate.specificity ?? [], current.specificity ?? []) ||
+    candidate.order - current.order) > 0
+
 const collectCssRules = (cssText) => {
   if (typeof CSSStyleSheet !== 'undefined' && CSSStyleSheet.prototype.replaceSync) {
     try {
@@ -309,7 +316,7 @@ const collectStylesheetColors = (fragment, selectorMatches) => {
 
       splitSelectors(rule.selector).forEach((selector) => {
         const specificity = selectorSpecificity(selector)
-        const styles = selectorStyles.get(selector) || {}
+        const declarations = selectorStyles.get(selector) || {}
         for (const property of properties) {
           const candidate = {
             value: rule.style.getPropertyValue(property),
@@ -317,16 +324,9 @@ const collectStylesheetColors = (fragment, selectorMatches) => {
             specificity,
             order
           }
-          const current = styles[property]
-          if (
-            !current ||
-            Number(candidate.important) > Number(current.important) ||
-            (candidate.important === current.important && candidate.order > current.order)
-          ) {
-            styles[property] = candidate
-          }
+          if (declarationWins(candidate, declarations[property])) declarations[property] = candidate
         }
-        selectorStyles.set(selector, styles)
+        selectorStyles.set(selector, declarations)
       })
       order += 1
     })
@@ -335,17 +335,9 @@ const collectStylesheetColors = (fragment, selectorMatches) => {
   selectorStyles.forEach((declarations, selector) => {
     querySelectorAll(fragment, selector, selectorMatches).forEach((element) => {
       const styles = elementStyles.get(element) || {}
-      Object.entries(declarations).forEach(([property, candidate]) => {
-        const current = styles[property]
-        const wins =
-          !current ||
-          Number(candidate.important) > Number(current.important) ||
-          (candidate.important === current.important &&
-            (compareSpecificity(candidate.specificity, current.specificity) > 0 ||
-              (compareSpecificity(candidate.specificity, current.specificity) === 0 &&
-                candidate.order > current.order)))
-        if (wins) styles[property] = candidate
-      })
+      for (const [property, candidate] of Object.entries(declarations)) {
+        if (declarationWins(candidate, styles[property])) styles[property] = candidate
+      }
       elementStyles.set(element, styles)
     })
   })
@@ -356,19 +348,7 @@ const collectStylesheetColors = (fragment, selectorMatches) => {
 const resolvedBackground = (background, inheritedBackground) =>
   compositeCssColor(background, inheritedBackground) || inheritedBackground
 
-const formatLegacyColor = (color) => {
-  const parsed = parseCssColor(color)
-  if (!parsed) return color
-
-  const hex = [parsed.r, parsed.g, parsed.b]
-    .map((channel) =>
-      Math.round(channel * 255)
-        .toString(16)
-        .padStart(2, '0')
-    )
-    .join('')
-  return `#${hex}`
-}
+const formatLegacyColor = (color) => serializeHex(parseCssColor(color) ?? undefined) || color
 
 const stylesheetDeclarationWins = (declaration, inlineValue, inlinePriority) =>
   Boolean(
