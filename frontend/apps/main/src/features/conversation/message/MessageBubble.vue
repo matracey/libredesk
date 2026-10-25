@@ -117,12 +117,9 @@
                 v-else-if="message.content_type !== 'text' && sanitizedContent"
                 ref="messageContentEl"
                 @click="onMessageContentClick"
-                :class="{
-                  'email-light-canvas': !isOutgoing && convStore.current?.inbox_channel === 'email'
-                }"
               >
                 <Letter
-                  :key="darkMode ? 'dark' : 'light'"
+                  :key="useNormalizedEmailColors ? 'dark' : 'original'"
                   :html="renderedHtmlContent"
                   :allowedSchemas="allowedSchemas"
                   :rewriteExternalLinks="rewriteMessageLink"
@@ -332,10 +329,7 @@ const measureExpandable = () => {
   isExpandable.value = el.scrollHeight > COLLAPSE_THRESHOLD_PX
 }
 
-// Email HTML images change height after initial paint - re-measure on load. Also re-run
-// whenever the content DOM is (re)created, since a dark-mode toggle remounts the Letter
-// subtree (see the `props.darkMode` watcher below) and any images it inserts are fresh
-// elements with no listener attached yet.
+// Reconnect after Letter remounts so newly inserted images trigger measurement.
 const attachImageLoadListeners = () => {
   const imgs = contentWrapperEl.value?.querySelectorAll?.('img') ?? []
   imgs.forEach((img) => {
@@ -443,16 +437,18 @@ const sanitizedContent = computed(() => {
     .replace(STRIKE_OPEN_TAG, '<span style="text-decoration: line-through">')
     .replace(STRIKE_CLOSE_TAG, '</span>')
 })
+const useNormalizedEmailColors = computed(
+  () => props.darkMode && !isOutgoing.value && !props.message.private &&
+    convStore.current?.inbox_channel === 'email' && props.message.content_type === 'html'
+)
 const renderedHtmlContent = computed(() =>
-  props.darkMode && !isOutgoing.value && convStore.current?.inbox_channel === 'email'
-    ? normalizeEmailHtml(sanitizedContent.value, props.darkMode)
-    : sanitizedContent.value
+  normalizeEmailHtml(sanitizedContent.value, useNormalizedEmailColors.value)
 )
 
 // Letter captures its sanitized HTML during setup and does not react to prop changes.
-// Remount it on theme changes, then reconnect image load measurement to the new DOM.
+// Reconnect image load measurement after its color mode changes.
 watch(
-  () => props.darkMode,
+  useNormalizedEmailColors,
   async () => {
     await nextTick()
     measureExpandable()
