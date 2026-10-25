@@ -13,11 +13,7 @@ const COLOR_DECLARATION = /(^|;)(\s*)(color|background-color|background)(\s*:\s*
 const CSS_RULE = /([^{}]+)\{([^{}]*)\}/g
 const BACKGROUND_IMAGE_DECLARATION = /(?:^|;)\s*background-image\s*:\s*([^;}]+)/gi
 const BACKGROUND_SHORTHAND_DECLARATION = /(?:^|;)\s*background\s*:\s*([^;}]+)/gi
-// Matches a top-level `@media (... prefers-color-scheme ...) { ... }` block (one level of rule
-// nesting). These blocks are already conditioned on a colour scheme, so their declarations must
-// be left byte-for-byte untouched: remapping a `dark` block would re-invert colours that are
-// already dark-mode-safe, and remapping a `light` block would corrupt colours that should only
-// ever apply when this normalizer's own dark mode is NOT active.
+// Sender-provided theme rules must not be inverted again.
 const PREFERS_COLOR_SCHEME_BLOCK =
   /(@media[^{}]*prefers-color-scheme[^{}]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\})/gi
 const NON_CONTENT_TAGS = new Set(['style', 'script', 'title'])
@@ -105,14 +101,13 @@ const normalizeDeclarations = (cssText, inheritedBackground) => {
   }
 }
 
-const normalizeStyleRuleText = (
-  cssText,
+const normalizeStyleBlocks = ({
   fragment,
   imageBackedElements,
   selectorMatches,
   mixedStyleTargets
-) =>
-  cssText.replace(CSS_RULE, (rule, selector, declarations) => {
+}) => {
+  const normalizeRule = (rule, selector, declarations) => {
     const targets = querySelectorAll(fragment, selector, selectorMatches)
     if (hasImageBackground(declarations)) return rule
 
@@ -124,32 +119,29 @@ const normalizeStyleRuleText = (
       return rule
     }
     return `${selector}{${normalizeDeclarations(declarations, DARK_MESSAGE_BACKGROUND).cssText}}`
-  })
-
-const normalizeStyleBlocks = (
-  fragment,
-  imageBackedElements,
-  selectorMatches,
-  mixedStyleTargets
-) => {
+  }
   fragment.querySelectorAll('style').forEach((style) => {
     style.textContent = style.textContent
       .split(PREFERS_COLOR_SCHEME_BLOCK)
       .map((segment, index) =>
-        // Odd indices are the captured `prefers-color-scheme` blocks from the split above -
-        // leave them untouched. Even indices are the surrounding text, which normalizes as usual.
-        index % 2 === 1
-          ? segment
-          : normalizeStyleRuleText(
-              segment,
-              fragment,
-              imageBackedElements,
-              selectorMatches,
-              mixedStyleTargets
-            )
+        index % 2 === 1 ? segment : segment.replace(CSS_RULE, normalizeRule)
       )
       .join('')
   })
+}
+
+// Reply chains can be too deep for recursive traversal.
+const walkElements = (fragment, initialContext, visit) => {
+  const stack = Array.from(fragment.children)
+    .reverse()
+    .map((element) => [element, initialContext])
+  while (stack.length) {
+    const [element, inherited] = stack.pop()
+    const context = visit(element, inherited)
+    Array.from(element.children)
+      .reverse()
+      .forEach((child) => stack.push([child, context]))
+  }
 }
 
 const hasImageBackground = (cssText) => {
@@ -193,17 +185,11 @@ const collectImageBackedElements = (fragment, selectorMatches) => {
   })
 
   const protectedElements = new WeakSet()
-  const stack = Array.from(fragment.children)
-    .reverse()
-    .map((element) => ({ element, protectedByAncestor: false }))
-  while (stack.length > 0) {
-    const { element, protectedByAncestor } = stack.pop()
+  walkElements(fragment, false, (element, protectedByAncestor) => {
     const isProtected = protectedByAncestor || roots.has(element)
     if (isProtected) protectedElements.add(element)
-    Array.from(element.children)
-      .reverse()
-      .forEach((child) => stack.push({ element: child, protectedByAncestor: isProtected }))
-  }
+    return isProtected
+  })
   return protectedElements
 }
 
@@ -356,21 +342,18 @@ const resolvedBackground = (background, inheritedBackground) =>
 
 const formatLegacyColor = (color) => serializeHex(parseCssColor(color) ?? undefined) || color
 
-const stylesheetDeclarationWins = (declaration, inlineValue, inlinePriority) =>
+const stylesheetDeclarationWins = (declaration, style, property) =>
   Boolean(
-    declaration && (!inlineValue || (declaration.important && inlinePriority !== 'important'))
+    declaration &&
+    (!style.getPropertyValue(property) ||
+      (declaration.important && style.getPropertyPriority(property) !== 'important'))
   )
 
-const normalizeElement = (
-  element,
-  inheritedBackground,
-  inheritedForeground,
-  stylesheetColors,
-  rawStylesheetColors,
-  mixedStyleTargets
-) => {
+const normalizeElement = (element, inherited, context) => {
+  const { background: inheritedBackground, foreground: inheritedForeground } = inherited
+  const { stylesheetColors, rawStylesheetColors, mixedStyleTargets } = context
   if (NON_CONTENT_TAGS.has(element.tagName.toLowerCase())) {
-    return { background: inheritedBackground, foreground: inheritedForeground }
+    return inherited
   }
 
   let effectiveBackground = inheritedBackground
@@ -384,8 +367,10 @@ const normalizeElement = (
   const inlineBackground = element.style.getPropertyValue('background-color')
 
   if (legacyBackground && !stylesheetBackground && !inlineBackground) {
-    const normalizedBackground = remapColorForDarkMode(legacyBackground)
-    if (parseCssColor(normalizedBackground)) {
+    const normalizedBackground = remapBackgroundForDarkMode(legacyBackground)
+    if (normalizedBackground === 'transparent') {
+      element.removeAttribute('bgcolor')
+    } else if (parseCssColor(normalizedBackground)) {
       const renderedBackground = resolvedBackground(normalizedBackground, inheritedBackground)
       const legacyColor = formatLegacyColor(renderedBackground)
       element.setAttribute('bgcolor', legacyColor)
@@ -394,10 +379,7 @@ const normalizeElement = (
   }
 
   if (stylesheetBackground && parseCssColor(stylesheetBackground.value)?.a !== 0) {
-    // Composited against the ancestor background, not `effectiveBackground`: a stylesheet
-    // background-color always wins the cascade over a `bgcolor` attribute on the same element
-    // (bgcolor never stacks under it), so a translucent stylesheet colour must be resolved
-    // against what's truly behind the element, not against the bgcolor value it overrides.
+    // CSS replaces bgcolor; translucent colors composite over the ancestor, not the overridden fill.
     effectiveBackground = resolvedBackground(stylesheetBackground.value, inheritedBackground)
   }
   if (parseCssColor(stylesheet?.color?.value)) {
@@ -415,9 +397,6 @@ const normalizeElement = (
       normalized.backgroundColor &&
       parseCssColor(normalized.backgroundColor)?.a !== 0
     ) {
-      // Same reasoning as above: an inline background-color that wins the cascade replaces
-      // any bgcolor/stylesheet background on this element rather than stacking on top of it,
-      // so it must be composited against the ancestor background, not the overridden value.
       effectiveBackground = resolvedBackground(normalized.backgroundColor, inheritedBackground)
     }
     const inlineColorWins =
@@ -445,22 +424,17 @@ const normalizeElement = (
     const rawForeground = rawStylesheet?.color
     const backgroundWins = stylesheetDeclarationWins(
       rawBackground,
-      element.style.getPropertyValue('background-color'),
-      element.style.getPropertyPriority('background-color')
+      element.style,
+      'background-color'
     )
-    const foregroundWins = stylesheetDeclarationWins(
-      rawForeground,
-      element.style.getPropertyValue('color'),
-      element.style.getPropertyPriority('color')
-    )
+    const foregroundWins = stylesheetDeclarationWins(rawForeground, element.style, 'color')
     const pair =
       backgroundWins && foregroundWins
         ? remapColorPairForDarkMode(rawForeground.value, rawBackground.value, inheritedBackground)
         : null
 
     if (backgroundWins) {
-      const normalizedBackground =
-        pair?.backgroundColor || remapColorForDarkMode(rawBackground.value)
+      const normalizedBackground = remapBackgroundForDarkMode(rawBackground.value)
       element.style.setProperty(
         'background-color',
         normalizedBackground,
@@ -473,9 +447,10 @@ const normalizeElement = (
     }
 
     if (foregroundWins) {
-      const normalizedForeground =
-        pair?.color ||
-        ensureColorContrast(remapColorForDarkMode(rawForeground.value), effectiveBackground)
+      const normalizedForeground = ensureColorContrast(
+        pair?.color || remapColorForDarkMode(rawForeground.value),
+        effectiveBackground
+      )
       element.style.setProperty(
         'color',
         normalizedForeground,
@@ -498,82 +473,35 @@ const normalizeElement = (
   return { background: effectiveBackground, foreground: effectiveForeground }
 }
 
-const normalizeElements = (
-  fragment,
-  imageBackedElements,
-  stylesheetColors,
-  rawStylesheetColors,
-  mixedStyleTargets
-) => {
-  const stack = Array.from(fragment.children)
-    .reverse()
-    .map((element) => ({
-      element,
-      inheritedBackground: DARK_MESSAGE_BACKGROUND,
-      inheritedForeground: DARK_MESSAGE_FOREGROUND
-    }))
-
-  while (stack.length > 0) {
-    const { element, inheritedBackground, inheritedForeground } = stack.pop()
-    if (imageBackedElements.has(element)) {
-      preserveLegacyBackgroundImage(element)
-      // Descend without normalizing: a protected element can itself contain a nested
-      // legacy `background`-attribute element (e.g. a per-cell table banner inside an
-      // outer image-backed wrapper) that also needs its raw attribute converted to an
-      // inline style before sanitization, since `collectImageBackedElements` already
-      // marked the whole subtree as protected.
-      Array.from(element.children)
-        .reverse()
-        .forEach((child) =>
-          stack.push({ element: child, inheritedBackground, inheritedForeground })
-        )
-      continue
-    }
-
-    const effective = normalizeElement(
-      element,
-      inheritedBackground,
-      inheritedForeground,
-      stylesheetColors,
-      rawStylesheetColors,
-      mixedStyleTargets
-    )
-    Array.from(element.children)
-      .reverse()
-      .forEach((child) =>
-        stack.push({
-          element: child,
-          inheritedBackground: effective.background,
-          inheritedForeground: effective.foreground
-        })
-      )
-  }
-}
-
-/**
- * Remaps email colors for dark mode, or returns the original HTML unchanged.
- * @param {string} html
- * @param {boolean} darkMode
- * @returns {string}
- */
 export const normalizeEmailHtml = (html, darkMode) => {
   if (!darkMode || typeof html !== 'string' || html.length === 0) return html
 
   try {
     const template = document.createElement('template')
     template.innerHTML = html
-    const selectorMatches = new Map()
-    const imageBackedElements = collectImageBackedElements(template.content, selectorMatches)
-    const rawStylesheetColors = collectStylesheetColors(template.content, selectorMatches)
-    const mixedStyleTargets = new WeakSet()
-    normalizeStyleBlocks(template.content, imageBackedElements, selectorMatches, mixedStyleTargets)
-    const stylesheetColors = collectStylesheetColors(template.content, selectorMatches)
-    normalizeElements(
-      template.content,
-      imageBackedElements,
-      stylesheetColors,
-      rawStylesheetColors,
-      mixedStyleTargets
+    const context = {
+      fragment: template.content,
+      selectorMatches: new Map(),
+      mixedStyleTargets: new WeakSet()
+    }
+    const { fragment, selectorMatches } = context
+    context.imageBackedElements = collectImageBackedElements(fragment, selectorMatches)
+    context.rawStylesheetColors = collectStylesheetColors(fragment, selectorMatches)
+    normalizeStyleBlocks(context)
+    context.stylesheetColors = collectStylesheetColors(fragment, selectorMatches)
+    walkElements(
+      fragment,
+      {
+        background: DARK_MESSAGE_BACKGROUND,
+        foreground: DARK_MESSAGE_FOREGROUND
+      },
+      (element, inherited) => {
+        if (!context.imageBackedElements.has(element))
+          return normalizeElement(element, inherited, context)
+        // Protected subtrees still need nested legacy banner URLs preserved before sanitization.
+        preserveLegacyBackgroundImage(element)
+        return inherited
+      }
     )
     return template.innerHTML
   } catch (error) {
