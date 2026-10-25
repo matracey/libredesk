@@ -10,9 +10,6 @@ const CONTRAST_ROUNDING_MARGIN = 0.05
 const MAX_CACHE_ENTRIES = 512
 const CONTEXTUAL_COLOR = /^(currentcolor|inherit|initial|revert(?:-layer)?|unset)$|\bvar\s*\(/i
 
-const remappedColorCache = new Map()
-const contrastColorCache = new Map()
-
 const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, value))
 
 const memoize = (compute, keyFor = (value) => value) => {
@@ -25,14 +22,6 @@ const memoize = (compute, keyFor = (value) => value) => {
     cache.set(key, value)
     return value
   }
-}
-
-const cacheValue = (cache, key, value) => {
-  if (cache.size >= MAX_CACHE_ENTRIES) {
-    cache.delete(cache.keys().next().value)
-  }
-  cache.set(key, value)
-  return value
 }
 
 const hslToRgb = ({ h, s, l, a = 1 }) => {
@@ -104,12 +93,6 @@ const composite = (foreground, background) => {
   }
 }
 
-/**
- * Blends a foreground color over a background color.
- * @param {string} foregroundValue
- * @param {string} backgroundValue
- * @returns {string | null}
- */
 export const compositeCssColor = (foregroundValue, backgroundValue) => {
   const foreground = parseCssColor(foregroundValue)
   const background = parseCssColor(backgroundValue)
@@ -135,21 +118,13 @@ export const getContrastRatio = (foregroundValue, backgroundValue) => {
   return contrastRatio(foreground, background)
 }
 
-/**
- * Remaps a CSS color for dark mode without changing its hue or saturation.
- * @param {string} value
- * @returns {string}
- */
-export const remapColorForDarkMode = (value) => {
-  if (remappedColorCache.has(value)) return remappedColorCache.get(value)
-
+export const remapColorForDarkMode = memoize((value) => {
   const parsed = parseCssColor(value)
-  if (!parsed || parsed.a === 0) return cacheValue(remappedColorCache, value, value)
-
+  if (!parsed || parsed.a === 0) return value
   const hsl = rgbToHsl(parsed)
   hsl.l = DARK_MIN_LIGHTNESS + (1 - hsl.l) * (DARK_MAX_LIGHTNESS - DARK_MIN_LIGHTNESS)
-  return cacheValue(remappedColorCache, value, formatHslColor(hsl))
-}
+  return formatHslColor(hsl)
+})
 
 const findPassingLightness = (hsl, background, direction, minimumRatio) => {
   let failing = hsl.l
@@ -181,66 +156,39 @@ const findPassingLightnessCandidates = (hsl, background, targetRatio, preferLigh
       return preferLighter ? right - left : left - right
     })
 
-/**
- * Adjusts a foreground color until it meets the requested contrast ratio.
- * @param {string} foregroundValue
- * @param {string} backgroundValue
- * @param {number} [minimumRatio=4.5]
- * @param {boolean} [preferLighter]
- * @returns {string}
- */
-export const ensureColorContrast = (
-  foregroundValue,
-  backgroundValue,
-  minimumRatio = MIN_CONTRAST_RATIO,
-  preferLighter
-) => {
-  const cacheKey = `${foregroundValue}\0${backgroundValue}\0${minimumRatio}\0${preferLighter}`
-  if (contrastColorCache.has(cacheKey)) return contrastColorCache.get(cacheKey)
+export const ensureColorContrast = memoize(
+  (foregroundValue, backgroundValue, minimumRatio = MIN_CONTRAST_RATIO, preferLighter) => {
+    const foreground = parseCssColor(foregroundValue)
+    const background = parseCssColor(backgroundValue)
+    if (!foreground || foreground.a === 0 || !background) {
+      return foregroundValue
+    }
+    if (contrastRatio(foreground, background) >= minimumRatio) {
+      return foregroundValue
+    }
 
-  const foreground = parseCssColor(foregroundValue)
-  const background = parseCssColor(backgroundValue)
-  if (!foreground || foreground.a === 0 || !background) {
-    return cacheValue(contrastColorCache, cacheKey, foregroundValue)
-  }
-  if (contrastRatio(foreground, background) >= minimumRatio) {
-    return cacheValue(contrastColorCache, cacheKey, foregroundValue)
-  }
+    const hsl = rgbToHsl(foreground)
+    const targetRatio = minimumRatio + CONTRAST_ROUNDING_MARGIN
+    let searchHsl = hsl
+    let candidates = findPassingLightnessCandidates(
+      searchHsl,
+      background,
+      targetRatio,
+      preferLighter
+    )
 
-  const hsl = rgbToHsl(foreground)
-  const targetRatio = minimumRatio + CONTRAST_ROUNDING_MARGIN
-  let searchHsl = hsl
-  let candidates = findPassingLightnessCandidates(searchHsl, background, targetRatio, preferLighter)
+    if (candidates.length === 0 && hsl.a !== 1) {
+      // Very low alpha can make the requested contrast impossible without increasing opacity.
+      searchHsl = { ...hsl, a: 1 }
+      candidates = findPassingLightnessCandidates(searchHsl, background, targetRatio, preferLighter)
+    }
 
-  if (candidates.length === 0 && hsl.a !== 1) {
-    // Alpha blending caps the contrast achievable by adjusting lightness alone (a near-fully
-    // transparent foreground is dominated by the background regardless of its own lightness).
-    // Fall back to a fully opaque foreground: black or white against any background reaches a
-    // ratio of up to ~21:1, so this recovers WCAG AA (4.5:1) requests that the lightness-only
-    // search above could not. It is not guaranteed to satisfy every possible `minimumRatio` -
-    // e.g. some backgrounds cap opaque contrast below AAA's 7:1 - in which case the final
-    // fallback below still applies.
-    searchHsl = { ...hsl, a: 1 }
-    candidates = findPassingLightnessCandidates(searchHsl, background, targetRatio, preferLighter)
-  }
+    return candidates.length ? formatHslColor({ ...searchHsl, l: candidates[0] }) : foregroundValue
+  },
+  (foreground, background, minimumRatio = MIN_CONTRAST_RATIO, preferLighter) =>
+    `${foreground}\0${background}\0${minimumRatio}\0${preferLighter}`
+)
 
-  if (candidates.length === 0) {
-    return cacheValue(contrastColorCache, cacheKey, foregroundValue)
-  }
-  return cacheValue(
-    contrastColorCache,
-    cacheKey,
-    formatHslColor({ ...searchHsl, l: candidates[0] })
-  )
-}
-
-/**
- * Remaps a foreground and background together, keeping their contrast direction.
- * @param {string} foregroundValue
- * @param {string} backgroundValue
- * @param {string} [backdropValue='rgb(0, 0, 0)']
- * @returns {{color: string, backgroundColor: string}}
- */
 export const remapColorPairForDarkMode = (
   foregroundValue,
   backgroundValue,

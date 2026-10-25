@@ -10,12 +10,14 @@ import {
 } from './emailColorNormalizer.js'
 
 describe('remapColorForDarkMode', () => {
-  test('maps black to near-white', () => {
-    expect(remapColorForDarkMode('#000000')).toBe('hsl(0 0% 92%)')
-  })
-
-  test('maps white to near-black', () => {
-    expect(remapColorForDarkMode('#FFFFFF')).toBe('hsl(0 0% 8%)')
+  test.each([
+    ['black to near-white', '#000000', 'hsl(0 0% 92%)'],
+    ['white to near-black', '#FFFFFF', 'hsl(0 0% 8%)'],
+    ['saturated red without hue or saturation changes', '#ff0000', 'hsl(0 100% 50%)'],
+    ['a named colour', 'navy', 'hsl(240 100% 70.92%)'],
+    ['transparent unchanged', 'transparent', 'transparent']
+  ])('maps %s', (_name, input, output) => {
+    expect(remapColorForDarkMode(input)).toBe(output)
   })
 
   test('keeps a mid-grey near the middle of the range', () => {
@@ -25,33 +27,67 @@ describe('remapColorForDarkMode', () => {
     expect(output.r).toBeCloseTo(0.5, 1)
   })
 
-  test('preserves the hue and saturation of saturated red', () => {
-    expect(remapColorForDarkMode('#ff0000')).toBe('hsl(0 100% 50%)')
-  })
-
   test('parses grad hues without also applying the radian conversion', () => {
     expect(parseCssColor('hsl(10grad 100% 50%)')).toEqual(parseCssColor('hsl(9deg 100% 50%)'))
   })
 
-  test('leaves transparent unchanged', () => {
-    expect(remapColorForDarkMode('transparent')).toBe('transparent')
-  })
-
-  test('remaps a named colour', () => {
-    expect(remapColorForDarkMode('navy')).toBe('hsl(240 100% 70.92%)')
-  })
-
-  test('resolves each named colour against the live document once', () => {
+  test('caches named colours without touching the live document', () => {
     const appendChild = vi.spyOn(document.documentElement, 'appendChild')
 
-    remapColorForDarkMode('papayawhip')
-    remapColorForDarkMode('papayawhip')
+    expect(parseCssColor('papayawhip')).toBe(parseCssColor('papayawhip'))
 
-    expect(appendChild).toHaveBeenCalledTimes(1)
+    expect(appendChild).not.toHaveBeenCalled()
     appendChild.mockRestore()
   })
 
-  test.each(['currentColor', 'inherit'])('leaves %s unchanged', (value) => {
+  test.each([
+    ['CanvasText', '#000'],
+    ['Canvas', '#fff'],
+    ['Highlight', 'rgb(0, 153, 255)'],
+    ['rgb(calc(50 + 50), 0, 0)', 'rgb(100, 0, 0)'],
+    ['hsl(calc(60 * 2) 100% 50%)', '#0f0']
+  ])('resolves browser-native %s colors without leaving a DOM probe', (input, expected) => {
+    const childCount = document.documentElement.childElementCount
+    expect(parseCssColor(input)).toEqual(parseCssColor(expected))
+    expect(document.documentElement.childElementCount).toBe(childCount)
+  })
+
+  test('resolves each browser-native expression only once', () => {
+    const appendChild = vi.spyOn(document.documentElement, 'appendChild')
+    try {
+      const input = 'rgb(calc(20 + 22), 0, 0)'
+      expect(parseCssColor(input)).toBe(parseCssColor(input))
+      expect(appendChild).toHaveBeenCalledOnce()
+    } finally {
+      appendChild.mockRestore()
+    }
+  })
+
+  test('removes the native probe when computed-style resolution fails', () => {
+    const childCount = document.documentElement.childElementCount
+    const getComputedStyle = vi.spyOn(window, 'getComputedStyle').mockImplementationOnce(() => {
+      throw new Error('Computed style unavailable')
+    })
+    try {
+      expect(() => parseCssColor('rgb(calc(21 + 22), 0, 0)')).toThrow('Computed style unavailable')
+      expect(document.documentElement.childElementCount).toBe(childCount)
+    } finally {
+      getComputedStyle.mockRestore()
+    }
+  })
+
+  test.each([
+    'currentColor',
+    'inherit',
+    'initial',
+    'unset',
+    'revert',
+    'revert-layer',
+    'var(--email-color)',
+    'rgb(calc(var(--red) + 20) 0 0)',
+    'rgb(not a colour)',
+    'rgb(1,2,3,4,5)'
+  ])('leaves contextual or malformed %s unchanged', (value) => {
     expect(remapColorForDarkMode(value)).toBe(value)
   })
 
@@ -60,28 +96,20 @@ describe('remapColorForDarkMode', () => {
     expect(output.a).toBeCloseTo(0.4, 3)
   })
 
-  test('leaves malformed colours unchanged', () => {
-    expect(remapColorForDarkMode('rgb(not a colour)')).toBe('rgb(not a colour)')
-  })
-
-  test('leaves rgb() values with too many components unchanged', () => {
-    expect(remapColorForDarkMode('rgb(1,2,3,4,5)')).toBe('rgb(1,2,3,4,5)')
-  })
-
   test('raises paired colour contrast to WCAG AA', () => {
     const output = remapColorPairForDarkMode('#777777', '#888888')
     expect(getContrastRatio(output.color, output.backgroundColor)).toBeGreaterThanOrEqual(4.5)
   })
 
-  test('recovers if resolving a named colour throws', () => {
+  test('parses named colours even when DOM operations are unavailable', () => {
     const appendChild = vi.spyOn(document.documentElement, 'appendChild').mockImplementation(() => {
       throw new Error('boom')
     })
 
     try {
       expect(() => remapColorForDarkMode('deeppink')).not.toThrow()
-      expect(appendChild).toHaveBeenCalled()
-      expect(remapColorForDarkMode('deeppink')).toBe('deeppink')
+      expect(appendChild).not.toHaveBeenCalled()
+      expect(parseCssColor('deeppink')).toEqual({ r: 1, g: 20 / 255, b: 147 / 255, a: 1 })
     } finally {
       appendChild.mockRestore()
     }
