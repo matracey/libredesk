@@ -39,7 +39,7 @@ const collectColorDeclarations = (cssText) => {
 
     declarations.push({
       important: Boolean(parsed.important),
-      index: match.index,
+      order: match.index,
       property: property === 'background' ? 'background-color' : property,
       value: parsed.color
     })
@@ -48,37 +48,43 @@ const collectColorDeclarations = (cssText) => {
 }
 
 const findWinningDeclaration = (declarations, property) =>
-  declarations.reduce((winner, declaration) => {
-    if (declaration.property !== property) return winner
-    if (!winner || Number(declaration.important) > Number(winner.important)) return declaration
-    if (declaration.important === winner.important && declaration.index > winner.index) {
-      return declaration
-    }
-    return winner
-  }, null)
+  declarations.reduce(
+    (winner, declaration) =>
+      declaration.property === property && declarationWins(declaration, winner)
+        ? declaration
+        : winner,
+    null
+  )
+
+const remapBackgroundForDarkMode = (value) => {
+  const parsed = parseCssColor(value)
+  if (parsed?.a === 1) {
+    const lightest = Math.max(parsed.r, parsed.g, parsed.b)
+    const darkest = Math.min(parsed.r, parsed.g, parsed.b)
+    if (darkest >= 0.9 && lightest - darkest <= 0.04) return 'transparent'
+  }
+  return remapColorForDarkMode(value)
+}
 
 const normalizeDeclarations = (cssText, inheritedBackground) => {
   const declarations = collectColorDeclarations(cssText)
   const foreground = findWinningDeclaration(declarations, 'color')
   const background = findWinningDeclaration(declarations, 'background-color')
-  const replacements = new Map()
-
-  if (foreground && background) {
-    const pair = remapColorPairForDarkMode(foreground.value, background.value, inheritedBackground)
-    replacements.set(foreground.index, pair.color)
-    replacements.set(background.index, pair.backgroundColor)
-  }
-
-  declarations.forEach((declaration) => {
-    if (replacements.has(declaration.index)) return
-    const remapped = remapColorForDarkMode(declaration.value)
-    replacements.set(
-      declaration.index,
-      declaration.property === 'color'
-        ? ensureColorContrast(remapped, inheritedBackground)
-        : remapped
-    )
-  })
+  const backgroundColor = background && remapBackgroundForDarkMode(background.value)
+  const pair =
+    foreground &&
+    background &&
+    remapColorPairForDarkMode(foreground.value, background.value, inheritedBackground)
+  const replacements = new Map(
+    declarations.map((declaration) => [
+      declaration.order,
+      declaration === foreground && pair
+        ? ensureColorContrast(pair.color, resolvedBackground(backgroundColor, inheritedBackground))
+        : declaration.property === 'color'
+          ? ensureColorContrast(remapColorForDarkMode(declaration.value), inheritedBackground)
+          : remapBackgroundForDarkMode(declaration.value)
+    ])
+  )
 
   const normalizedCss = cssText.replace(
     COLOR_DECLARATION,
@@ -94,8 +100,8 @@ const normalizeDeclarations = (cssText, inheritedBackground) => {
 
   return {
     cssText: normalizedCss,
-    backgroundColor: background ? replacements.get(background.index) : null,
-    color: foreground ? replacements.get(foreground.index) : null
+    backgroundColor: background ? replacements.get(background.order) : null,
+    color: foreground ? replacements.get(foreground.order) : null
   }
 }
 
