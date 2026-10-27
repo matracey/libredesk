@@ -212,6 +212,39 @@ describe('conversation read state', () => {
     expect(store.hasPendingMessages).toBe(false)
   })
 
+  describe('optimistic outgoing messages', () => {
+    it('reconciles a pending reply when its WebSocket status update is missed', async () => {
+      vi.useFakeTimers()
+      const store = setup()
+      const tempUUID = store.addPendingMessage(
+        'conversation-a',
+        '<p>Reply</p>',
+        false,
+        { id: 7, type: 'agent' }
+      )
+      const queued = {
+        id: 9,
+        uuid: 'queued-reply',
+        conversation_uuid: 'conversation-a',
+        type: 'outgoing',
+        status: 'pending',
+        created_at: '2026-01-01T00:00:03Z'
+      }
+      store.replacePendingMessage('conversation-a', tempUUID, queued)
+      api.getConversationMessage.mockResolvedValueOnce({
+        data: { data: { ...queued, status: 'sent' } }
+      })
+
+      await vi.advanceTimersByTimeAsync(10000)
+
+      expect(api.getConversationMessage)
+        .toHaveBeenCalledExactlyOnceWith('conversation-a', 'queued-reply')
+      expect(store.conversationMessages.find(message => message.uuid === 'queued-reply')?.status)
+        .toBe('sent')
+      vi.useRealTimers()
+    })
+  })
+
   it('keeps failed message loads unread until refreshed successfully', async () => {
     const store = setup()
     api.getConversationMessage.mockRejectedValueOnce(new Error('offline'))
