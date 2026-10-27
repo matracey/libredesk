@@ -499,7 +499,7 @@ const expandComposer = () => {
 
 const attachmentCount = computed(() => mediaFiles.value.length + uploadingFiles.value.length)
 
-const processSend = async (
+const processSendImpl = async (
   skipContactEmailCheck = false,
   skipMissingTagsCheck = false,
   statusToSet = null
@@ -646,7 +646,7 @@ const processSend = async (
           send_from: isPrivate ? '' : sendFrom.value
         })
 
-        if (isPrivate && response?.data?.data) {
+        if (response?.data?.data) {
           conversationStore.replacePendingMessage(convUUID, tempUUIDs[i], response.data.data)
         }
       } catch (error) {
@@ -697,8 +697,12 @@ const processSend = async (
     }
     if (statusToSet) conversationStore.updateStatus(convUUID, statusToSet)
   }
-  isSending.value = false
 }
+
+const processSend = (...args) =>
+  processSendImpl(...args).finally(() => {
+    isSending.value = false
+  })
 
 const processSendAndSetStatus = (status) => processSend(false, false, status)
 

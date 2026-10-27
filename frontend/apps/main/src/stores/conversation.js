@@ -618,7 +618,11 @@ export const useConversationStore = defineStore('conversation', () => {
       const response = await api.getConversationMessage(conversationUUID, messageUUID)
       if (response?.data?.data) {
         const newMsg = response.data.data
-        messages.data.addMessage(conversationUUID, newMsg)
+        if (messages.data.hasMessage(conversationUUID, newMsg.uuid)) {
+          messages.data.updateMessage(conversationUUID, newMsg.uuid, newMsg)
+        } else {
+          messages.data.addMessage(conversationUUID, newMsg)
+        }
         messages.pending.delete(messageUUID)
         incrementMessageVersion()
         return newMsg
@@ -1052,13 +1056,18 @@ export const useConversationStore = defineStore('conversation', () => {
       })
     }, 0)
 
-    // Safety net: auto-remove after 10 seconds if still pending.
+    // Safety net: reconcile a real message whose WebSocket status update was missed.
     const tempId = pendingMessage.uuid
     setTimeout(() => {
-      if (messages.data.hasMessage(conversationUUID, tempId)) {
-        messages.data.removeMessage(conversationUUID, tempId)
-        incrementMessageVersion()
+      const current = messages.data.getAllPagesMessages(conversationUUID)
+        .find(message => message.render_key === tempId)
+      if (!current || current.status !== 'pending') return
+      if (current.uuid !== tempId) {
+        fetchMessage(conversationUUID, current.uuid)
+        return
       }
+      messages.data.removeMessage(conversationUUID, tempId)
+      incrementMessageVersion()
     }, 10000)
 
     return pendingMessage.uuid
